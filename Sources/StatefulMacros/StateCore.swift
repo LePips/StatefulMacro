@@ -115,6 +115,7 @@ public struct StateTransition<
             start: state,
             final: nil,
             background: nil,
+            goToFinalOnError: true,
             goToStartOnCompletion: true
         )
     }
