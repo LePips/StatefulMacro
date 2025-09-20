@@ -1,0 +1,22 @@
+{
+	"configurations": [
+		{
+			"type": "swift",
+			"request": "launch",
+			"args": [],
+			"cwd": "${workspaceFolder:StatefulMacros}",
+			"name": "Debug StatefulMacrosClient",
+			"program": "${workspaceFolder:StatefulMacros}/.build/debug/StatefulMacrosClient",
+			"preLaunchTask": "swift: Build Debug StatefulMacrosClient"
+		},
+		{
+			"type": "swift",
+			"request": "launch",
+			"args": [],
+			"cwd": "${workspaceFolder:StatefulMacros}",
+			"name": "Release StatefulMacrosClient",
+			"program": "${workspaceFolder:StatefulMacros}/.build/release/StatefulMacrosClient",
+			"preLaunchTask": "swift: Build Release StatefulMacrosClient"
+		}
+	]
+}
