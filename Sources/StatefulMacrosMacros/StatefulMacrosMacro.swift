@@ -54,7 +54,7 @@ public struct StatefulMacro: MemberMacro {
         providingMembersOf declaration: some DeclGroupSyntax,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        let (actionEnumDecl, isCasePathable) = findStateActionEnums(in: declaration)
+        let (actionEnumDecl, isCasePathable) = findActionEnum(in: declaration)
 
         guard let actionEnumDecl else {
             let diagnostic = Diagnostic(node: Syntax(node), message: StatefulMacroError.missingActionEnum)
@@ -71,6 +71,7 @@ public struct StatefulMacro: MemberMacro {
         let stateActionEnums = [actionEnumDecl]
         let (backgroundStateTypeName, backgroundStateEnum) = try handleBackgroundState(in: declaration)
         let (stateEnumName, stateEnum, hasErrorState) = try handleStateEnum(in: declaration, context: context)
+        let (eventTypeName, eventEnum, hasErrorEvent) = try handleEventEnum(in: declaration)
 
         let actionEnumName = "_Action"
         let actionEnum = try createActionEnum(
@@ -90,6 +91,7 @@ public struct StatefulMacro: MemberMacro {
         let coreProperty = createCoreProperty(
             stateEnumName: stateEnumName,
             actionEnumName: actionEnumName,
+            eventTypeName: eventTypeName,
             addFunctionStmts: addFunctionStmts
         )
 
@@ -98,6 +100,10 @@ public struct StatefulMacro: MemberMacro {
         """
 
         var newDecls: [DeclSyntax] = []
+
+        if let eventEnum {
+            newDecls.append(DeclSyntax(eventEnum))
+        }
 
         if let backgroundStateEnum {
             newDecls.append(DeclSyntax(backgroundStateEnum))
@@ -114,22 +120,24 @@ public struct StatefulMacro: MemberMacro {
         newDecls.append(contentsOf: createPublishedProperties(
             in: declaration,
             stateEnumName: stateEnumName,
-            hasErrorState: hasErrorState,
-            hasBackgroundStateType: backgroundStateEnum != nil
+            hasBackgroundStateType: backgroundStateEnum != nil,
+            hasEventType: eventEnum != nil,
+            hasError: hasErrorState || hasErrorEvent
         ))
 
-        newDecls.append(createPublisherAssignments(hasErrorVariable: hasErrorState, hasBackgroundState: backgroundStateEnum != nil))
-
-        if let initDecl = createInitializer(in: declaration, context: context, node: node) {
-            newDecls.append(initDecl)
-        }
+        newDecls.append(
+            createPublisherAssignments(
+                hasError: hasErrorState || hasErrorEvent,
+                hasBackgroundState: backgroundStateEnum != nil
+            )
+        )
 
         return newDecls
     }
 
     // MARK: - Private Helper Functions
 
-    private static func findStateActionEnums(in declaration: some DeclGroupSyntax) -> (actionEnum: EnumDeclSyntax?, isCasePathable: Bool) {
+    private static func findActionEnum(in declaration: some DeclGroupSyntax) -> (actionEnum: EnumDeclSyntax?, isCasePathable: Bool) {
         guard let actionEnum = declaration.memberBlock.members.compactMap({ $0.decl.as(EnumDeclSyntax.self) })
             .first(where: { $0.name.text == "Action" })
         else {
@@ -141,6 +149,11 @@ public struct StatefulMacro: MemberMacro {
         }
 
         return (actionEnum, isCasePathable)
+    }
+
+    private static func findEventEnum(in declaration: some DeclGroupSyntax) -> EnumDeclSyntax? {
+        declaration.memberBlock.members.compactMap { $0.decl.as(EnumDeclSyntax.self) }
+            .first(where: { $0.name.text == "Event" })
     }
 
     private static func handleBackgroundState(in declaration: some DeclGroupSyntax) throws -> (String, EnumDeclSyntax?) {
@@ -160,6 +173,48 @@ public struct StatefulMacro: MemberMacro {
             }
         }
         return (backgroundStateTypeName, backgroundStateEnum)
+    }
+
+    private static func handleEventEnum(in declaration: some DeclGroupSyntax) throws -> (String, EnumDeclSyntax?, Bool) {
+        let userDefinedEventEnum = findEventEnum(in: declaration)
+
+        var eventTypeName = "Never"
+        var eventEnum: EnumDeclSyntax?
+        var hasErrorCase = false
+
+        if let userDefinedEventEnum {
+            let newName = "_Event"
+            eventTypeName = newName
+
+            hasErrorCase = userDefinedEventEnum.memberBlock.members.contains { member in
+                guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self),
+                      let caseName = caseDecl.elements.first?.name.text
+                else {
+                    return false
+                }
+                return caseName == "error"
+            }
+
+            var conformances: [String] = []
+
+            if hasErrorCase {
+                conformances.append("WithErrorEvent")
+            }
+
+            let newCases = userDefinedEventEnum.memberBlock.members.filter { member in
+                guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self) else {
+                    return true
+                }
+                return !caseDecl.elements.contains { $0.name.text == "error" }
+            }
+
+            eventEnum = try EnumDeclSyntax("public enum \(raw: newName): \(raw: conformances.joined(separator: ", "))") {
+                for member in newCases {
+                    member
+                }
+            }
+        }
+        return (eventTypeName, eventEnum, hasErrorCase)
     }
 
     private static func handleStateEnum(
@@ -440,12 +495,19 @@ public struct StatefulMacro: MemberMacro {
         return addFunctionStmts
     }
 
-    private static func createCoreProperty(stateEnumName: String, actionEnumName: String, addFunctionStmts: [String]) -> DeclSyntax {
+    private static func createCoreProperty(
+        stateEnumName: String,
+        actionEnumName: String,
+        eventTypeName: String,
+        addFunctionStmts: [String]
+    ) -> DeclSyntax {
         let coreProperty: DeclSyntax =
             """
-            private lazy var core: StateCore<\(raw: stateEnumName), \(raw: actionEnumName)> = {
-                let core = StateCore<\(raw: stateEnumName), \(raw: actionEnumName)>()
+            private lazy var core: StateCore<\(raw: stateEnumName), \(raw: actionEnumName), \(raw: eventTypeName)> = {
+                let core = StateCore<\(raw: stateEnumName), \(raw: actionEnumName), \(raw: eventTypeName)>()
                 \(raw: addFunctionStmts.joined(separator: "\n\n"))
+
+                setupPublisherAssignments(core: core)
                 return core
             }()
             """
@@ -455,76 +517,12 @@ public struct StatefulMacro: MemberMacro {
     private static func createPublishedProperties(
         in declaration: some DeclGroupSyntax,
         stateEnumName: String,
-        hasErrorState: Bool,
-        hasBackgroundStateType: Bool
+        hasBackgroundStateType: Bool,
+        hasEventType: Bool,
+        hasError: Bool
     ) -> [DeclSyntax] {
+
         var newDecls: [DeclSyntax] = []
-
-        let hasPublishedState = declaration.memberBlock.members.contains { member in
-            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { return false }
-
-            let isPublished = varDecl.attributes.contains { attr in
-                attr.as(AttributeSyntax.self)?.attributeName.as(IdentifierTypeSyntax.self)?.name.text == "Published"
-            }
-
-            guard isPublished else { return false }
-
-            guard let binding = varDecl.bindings.first,
-                  let identifier = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text,
-                  identifier == "state"
-            else {
-                return false
-            }
-
-            guard let type = binding.typeAnnotation?.type.as(IdentifierTypeSyntax.self)?.name.text,
-                  type == stateEnumName
-            else {
-                return false
-            }
-
-            return true
-        }
-
-        if !hasPublishedState {
-            let stateVar: DeclSyntax =
-                """
-                @Published public var state: \(raw: stateEnumName) = .initial
-                """
-            newDecls.append(stateVar)
-        }
-
-        let hasPublishedError = declaration.memberBlock.members.contains { member in
-            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { return false }
-
-            let isPublished = varDecl.attributes.contains { attr in
-                attr.as(AttributeSyntax.self)?.attributeName.as(IdentifierTypeSyntax.self)?.name.text == "Published"
-            }
-
-            guard isPublished else { return false }
-
-            guard let binding = varDecl.bindings.first,
-                  let identifier = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text,
-                  identifier == "error"
-            else {
-                return false
-            }
-
-            guard let type = binding.typeAnnotation?.type.as(IdentifierTypeSyntax.self)?.name.text,
-                  type == stateEnumName
-            else {
-                return false
-            }
-
-            return true
-        }
-
-        if !hasPublishedError, hasErrorState {
-            let stateVar: DeclSyntax =
-                """
-                @Published public var error: Error? = nil
-                """
-            newDecls.append(stateVar)
-        }
 
         if hasBackgroundStateType {
             let backgroundStateVar: DeclSyntax =
@@ -534,11 +532,38 @@ public struct StatefulMacro: MemberMacro {
             newDecls.append(backgroundStateVar)
         }
 
+        if hasError {
+            let stateVar: DeclSyntax =
+                """
+                @Published public var error: Error? = nil
+                """
+            newDecls.append(stateVar)
+        }
+
+        let stateVar: DeclSyntax =
+            """
+            @Published public var state: \(raw: stateEnumName) = .initial
+            """
+        newDecls.append(stateVar)
+
+        if hasEventType {
+            let eventVar: DeclSyntax =
+                """
+                public var events: EventPublisher<_Event> {
+                    core.eventSubject
+                }
+                """
+            newDecls.append(eventVar)
+        }
+
         return newDecls
     }
 
-    private static func createPublisherAssignments(hasErrorVariable: Bool, hasBackgroundState: Bool) -> DeclSyntax {
-        let errorAssignment = hasErrorVariable ? """
+    private static func createPublisherAssignments(
+        hasError: Bool,
+        hasBackgroundState: Bool
+    ) -> DeclSyntax {
+        let errorAssignment = hasError ? """
         \ncore.$error
             .receive(on: DispatchQueue.main)
             .assign(to: &self.$error)
@@ -551,33 +576,11 @@ public struct StatefulMacro: MemberMacro {
         """ : ""
 
         return """
-        private func setupPublisherAssignments() {
+        private func setupPublisherAssignments(core: StateCore<_State, _Action, _Event>) {
             core.$state
                 .receive(on: DispatchQueue.main)
                 .assign(to: &self.$state)\(raw: errorAssignment)\(raw: backgroundStateAssignment)
         }
         """
-    }
-
-    private static func createInitializer(
-        in declaration: some DeclGroupSyntax,
-        context: some MacroExpansionContext,
-        node: AttributeSyntax
-    ) -> DeclSyntax? {
-        let hasInit = declaration.memberBlock.members.contains { member in
-            member.decl.is(InitializerDeclSyntax.self)
-        }
-
-        if !hasInit {
-            let initDecl: DeclSyntax =
-                """
-                public init() {
-                    setupPublisherAssignments()
-                }
-                """
-            return initDecl
-        } else {
-            return nil
-        }
     }
 }

@@ -2,10 +2,16 @@ import CasePaths
 import Combine
 import Foundation
 
+// TODO: need to protect against multiple actions that can change the state
+//       - only have one action that can change the state at a time
+//       - cancel behavior
+//       - transitions require start state
+//       - build graph on macro expansion and verify?
+
 // TODO: implement
 enum StateTransitionTaskRepeatBehavior {
     case cancel
-    case wait
+    case wait(count: Int)
 }
 
 public protocol CoreState {
@@ -30,6 +36,8 @@ public protocol StateAction: StateTransitional, CasePathIterable, Equatable {}
 public protocol WithCancelAction: StateAction {
     static var cancel: Self { get }
 }
+
+public protocol WithErrorEvent: Equatable {}
 
 public struct StateTransition<
     StateType,
@@ -120,7 +128,11 @@ public struct ActionFunctionRegistry<Payload>: _ActionFunctionRegistry {
 }
 
 @MainActor
-public class StateCore<StateType: CoreState, ActionType: StateAction>: ObservableObject where ActionType.StateType == StateType {
+public class StateCore<
+    StateType: CoreState,
+    ActionType: StateAction,
+    EventType
+>: ObservableObject where ActionType.StateType == StateType {
     typealias CaseKey = Int
 
     @Published
@@ -129,6 +141,8 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
     public private(set) var error: Error? = nil
     @Published
     public private(set) var state: StateType = .initial
+
+    public let eventSubject = EventPublisher<EventType>()
 
     public init() {}
 
@@ -141,6 +155,13 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
 
     private func isCancelAction<A: WithCancelAction>(from a: A) -> Bool {
         a == A.cancel
+    }
+
+    private var shouldRespondToError: Bool {
+        let hasErrorState = StateType.self is WithErrorState.Type
+        let hasErrorEvent = EventType.self is any WithErrorEvent.Type
+
+        return hasErrorState || hasErrorEvent
     }
 
     public func addFunction<S>(
@@ -162,9 +183,10 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
 
             backgroundStates.removeAll()
 
-            self.error = error
             state = errorState as! StateType
         }
+
+        self.error = error
     }
 
     // MARK: - sync send
@@ -241,6 +263,7 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
                 self.state = newState
             }
         }
+        let finalState = extractedAction.transition.final
 
         let backgroundState = extractedAction.transition.background
 
@@ -250,7 +273,7 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
             }
         }
 
-        var hasError = false
+        var _error: Error? = nil
 
         do {
             try await withThrowingTaskGroup { group in
@@ -269,21 +292,14 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
             // cancels are handled above
             return
         } catch {
-            hasError = true
-
-            await MainActor.run {
-                self.error = error
-            }
+            _error = error
         }
 
-        if let i = StateType.initial as? WithErrorState, hasError {
-            let errorState = unpackErrorState(from: i)
+        if let _error, shouldRespondToError {
+            self.error(_error)
+        } else if let finalState {
             await MainActor.run {
-                self.state = errorState as! StateType
-            }
-        } else if let newState = action(payload).transition.final {
-            await MainActor.run {
-                self.state = newState
+                self.state = finalState
             }
         }
 

@@ -28,20 +28,30 @@ func asyncMain(execute work: @escaping () async throws -> Void) {
 @Stateful
 class MyViewModel<P: Equatable>: ObservableObject {
 
+    enum ErrorType: Error {
+        case generic
+    }
+
     @CasePathable
     enum Action {
         case load
         case test(message: String)
+        case error
 
         var transition: Transition {
             switch self {
             case .load:
-//                return .to(.loading, then: .content)
+                //                return .to(.loading, then: .content)
                 .background(.loading)
             default:
                 .to(.initial)
             }
         }
+    }
+
+    enum Event {
+        case error
+        case otherEvent
     }
 
     enum BackgroundState {
@@ -53,8 +63,11 @@ class MyViewModel<P: Equatable>: ObservableObject {
         case content
     }
 
+    @Published
+    var value: Int
+
     init(_ value: Int) {
-        setupPublisherAssignments()
+        self.value = value
     }
 
     @Function(\Action.Cases.load)
@@ -63,22 +76,36 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
         try await Task.sleep(for: .seconds(2))
 
+        self.value = 123
+        self.error(ErrorType.generic)
+
         print("Loading done")
     }
 
     @Function(\Action.Cases.test)
     private func printTest(_ string: String) async throws {
         print("In printTest with string: \(string)")
-//        try await Task.sleep(for: .seconds(2))
     }
 }
 
 asyncMain {
     let vm = MyViewModel<Int>(1)
 
+//    let c = vm.events.sink { event in
+//        print(event, vm.error)
+//    }
+
+    let c = vm.$error.sink { error in
+        print("Error published: \(String(describing: error))")
+    }
+
+    let d = vm.$value.sink { newValue in
+        print("Value changed to \(newValue)")
+    }
+
     let a = Task { await vm.load() }
 
-    try await Task.sleep(for: .seconds(1))
+    try await Task.sleep(for: .seconds(0.5))
 
     if vm.backgroundStates.contains(.loading) {
         print("Background loading is in progress")
@@ -87,4 +114,7 @@ asyncMain {
     }
 
     await a.value
+
+    c.cancel()
+    d.cancel()
 }
