@@ -9,6 +9,7 @@ enum FunctionMacroError: String, DiagnosticMessage, Error {
     case nameCollision
     case requiresFunctionDeclaration
     case missingArgument
+    case parameterNamesMustBeUnderscored
 
     var message: String {
         switch self {
@@ -20,6 +21,8 @@ enum FunctionMacroError: String, DiagnosticMessage, Error {
             return "`@Function` can only be applied to functions"
         case .missingArgument:
             return "`@Function` requires a case path to an action as an argument"
+        case .parameterNamesMustBeUnderscored:
+            return "All parameters of a `@Function` must have underscored names"
         }
     }
 
@@ -69,6 +72,15 @@ public struct FunctionMacro: PeerMacro {
         if caseName == funcName {
             let diagnostic = Diagnostic(node: Syntax(funcDecl.name), message: FunctionMacroError.nameCollision)
             context.diagnose(diagnostic)
+        }
+
+        // Requirement 3: All parameters must have underscored names
+        for param in funcDecl.signature.parameterClause.parameters {
+            let firstName = param.firstName
+            if firstName.text != "_" && !firstName.text.starts(with: "_") {
+                let diagnostic = Diagnostic(node: Syntax(param), message: FunctionMacroError.parameterNamesMustBeUnderscored)
+                context.diagnose(diagnostic)
+            }
         }
 
         return []

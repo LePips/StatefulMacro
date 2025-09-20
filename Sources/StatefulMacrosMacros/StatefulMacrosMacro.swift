@@ -84,7 +84,8 @@ public struct StatefulMacro: MemberMacro {
         let generatedActionFunctions = try generateActionFunctions(
             from: stateActionEnums,
             in: declaration,
-            context: context
+            context: context,
+            hasError: hasErrorState || hasErrorEvent
         )
 
         let addFunctionStmts = try processFunctionAttributes(in: declaration, context: context)
@@ -363,7 +364,8 @@ public struct StatefulMacro: MemberMacro {
     private static func generateActionFunctions(
         from stateActionEnums: [EnumDeclSyntax],
         in declaration: some DeclGroupSyntax,
-        context: some MacroExpansionContext
+        context: some MacroExpansionContext,
+        hasError: Bool,
     ) throws -> [DeclSyntax] {
         var generatedActionFunctions: [DeclSyntax] = []
         let allCases = stateActionEnums.flatMap(\.memberBlock.members).compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }
@@ -372,7 +374,7 @@ public struct StatefulMacro: MemberMacro {
             caseDecl.elements.contains { $0.name.text == "error" }
         }
 
-        if hasErrorCase {
+        if hasErrorCase || hasError {
             let errorFunc = try FunctionDeclSyntax("public func error(_ error: Error)") {
                 StmtSyntax("\n\tcore.error(error)")
             }

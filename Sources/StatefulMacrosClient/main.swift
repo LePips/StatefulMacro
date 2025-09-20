@@ -34,6 +34,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
     @CasePathable
     enum Action {
+        case cancel
         case load
         case test(message: String)
         case error
@@ -61,6 +62,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
     enum State {
         case initial
         case content
+//        case error
     }
 
     @Published

@@ -7,6 +7,8 @@ import Foundation
 //       - cancel behavior
 //       - transitions require start state
 //       - build graph on macro expansion and verify?
+// TODO: - when error occurs but there is no error state
+//       - go to starting state, final state
 
 // TODO: implement
 enum StateTransitionTaskRepeatBehavior {
@@ -46,15 +48,18 @@ public struct StateTransition<
     let start: StateType?
     let final: StateType?
     let background: BackgroundStateType?
+    let goToFinalOnError: Bool
 
     private init(
         start: StateType? = nil,
         final: StateType? = nil,
-        background: BackgroundStateType? = nil
+        background: BackgroundStateType? = nil,
+        goToFinalOnError: Bool = false
     ) {
         self.start = start
         self.final = final
         self.background = background
+        self.goToFinalOnError = goToFinalOnError
     }
 
     public static var identity: Self {
@@ -83,6 +88,20 @@ public struct StateTransition<
             start: start,
             final: final,
             background: nil
+        )
+    }
+
+    // TODO: remove, see comment above about error handling
+
+    public static func to(
+        _ start: StateType,
+        thenWithError final: StateType
+    ) -> Self {
+        .init(
+            start: start,
+            final: final,
+            background: nil,
+            goToFinalOnError: true
         )
     }
 
@@ -173,7 +192,10 @@ public class StateCore<
         functionRegistry[action.hashValue] = registry
     }
 
-    public func error(_ error: Error) {
+    public func error(_ error: Error, finalState: StateType? = nil) {
+
+        self.error = error
+
         if let i = StateType.initial as? WithErrorState {
             let errorState = unpackErrorState(from: i)
 
@@ -184,9 +206,9 @@ public class StateCore<
             backgroundStates.removeAll()
 
             state = errorState as! StateType
+        } else if let finalState {
+            state = finalState
         }
-
-        self.error = error
     }
 
     // MARK: - sync send
@@ -295,8 +317,11 @@ public class StateCore<
             _error = error
         }
 
-        if let _error, shouldRespondToError {
-            self.error(_error)
+        if let _error {
+            self.error(
+                _error,
+                finalState: extractedAction.transition.goToFinalOnError ? finalState : nil
+            )
         } else if let finalState {
             await MainActor.run {
                 self.state = finalState
