@@ -57,7 +57,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
         case content
         case error
     }
-    
+
     init(_ value: Int) {
         setupPublisherAssignments()
     }
@@ -77,15 +77,13 @@ class MyViewModel<P: Equatable>: ObservableObject {
     }
 }
 
-let vm = MyViewModel<Int>(1)
-
 asyncMain {
-    
+    let vm = MyViewModel<Int>(1)
 
     let a = vm.$state
         .sink { newState in
-        print("State changed to: \(newState)")
-    }
+            print("State changed to: \(newState)")
+        }
 
     await vm.test(message: "The quick brown fox jumps over the lazy dog")
     await vm.load()
@@ -93,5 +91,3 @@ asyncMain {
     try await Task.sleep(for: .seconds(1))
     a.cancel()
 }
-
-vm.test(message: <#T##String#>)

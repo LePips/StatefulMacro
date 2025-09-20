@@ -96,7 +96,8 @@ public struct StateTransition<
         )
     }
 
-    public func mapBackground<NewBackgroundStateType: Hashable>(_ transform: (BackgroundStateType) -> NewBackgroundStateType) -> StateTransition<StateType, NewBackgroundStateType> {
+    public func mapBackground<NewBackgroundStateType: Hashable>(_ transform: (BackgroundStateType) -> NewBackgroundStateType)
+    -> StateTransition<StateType, NewBackgroundStateType> {
         .init(
             start: start,
             final: final,

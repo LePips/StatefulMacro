@@ -32,45 +32,23 @@ enum StatefulMacroError: String, DiagnosticMessage, Error {
 
 struct ActionFunctionConflictError: DiagnosticMessage, Error {
     let functionName: String
-    
+
     var message: String {
         "A function with the same name as the action case '\(functionName)' already exists."
     }
-    
+
     var diagnosticID: MessageID {
         MessageID(domain: "com.statefulmacro", id: "actionFunctionConflict")
     }
-    
+
     var severity: DiagnosticSeverity { .error }
 }
 
 /// Implementation of the `@Stateful` member macro.
-public struct StatefulMacro: MemberMacro, ExtensionMacro {
-    
-    // MARK: - Extension Macro
-    
-    public static func expansion(
-        of _: AttributeSyntax,
-        attachedTo declaration: some DeclGroupSyntax,
-        providingExtensionsOf type: some TypeSyntaxProtocol,
-        conformingTo _: [TypeSyntax],
-        in _: some MacroExpansionContext
-    ) throws -> [ExtensionDeclSyntax] {
-        let isObservableObject = declaration.inheritanceClause?.inheritedTypes.contains { inherited in
-            inherited.type.as(IdentifierTypeSyntax.self)?.name.text == "ObservableObject"
-        } ?? false
-
-        guard !isObservableObject else { return [] }
-
-        let observableObjectExtension: DeclSyntax = """
-            extension \(type.trimmed): ObservableObject {}
-            """
-
-        return [observableObjectExtension.cast(ExtensionDeclSyntax.self)]
-    }
+public struct StatefulMacro: MemberMacro {
 
     // MARK: - Member Macro
-    
+
     public static func expansion(
         of node: AttributeSyntax,
         providingMembersOf declaration: some DeclGroupSyntax,
@@ -116,11 +94,11 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
         )
 
         let transitionTypeAlias: DeclSyntax = """
-            public typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>
-            """
+        public typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>
+        """
 
         var newDecls: [DeclSyntax] = []
-        
+
         if let backgroundStateEnum {
             newDecls.append(DeclSyntax(backgroundStateEnum))
         }
@@ -138,7 +116,7 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
             stateEnumName: stateEnumName,
             hasErrorState: hasErrorState
         ))
-        
+
         newDecls.append(createPublisherAssignments(hasErrorVariable: hasErrorState))
 
         if let initDecl = createInitializer(in: declaration, context: context, node: node) {
@@ -151,7 +129,9 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
     // MARK: - Private Helper Functions
 
     private static func findStateActionEnums(in declaration: some DeclGroupSyntax) -> (actionEnum: EnumDeclSyntax?, isCasePathable: Bool) {
-        guard let actionEnum = declaration.memberBlock.members.compactMap({ $0.decl.as(EnumDeclSyntax.self) }).first(where: { $0.name.text == "Action" }) else {
+        guard let actionEnum = declaration.memberBlock.members.compactMap({ $0.decl.as(EnumDeclSyntax.self) })
+            .first(where: { $0.name.text == "Action" })
+        else {
             return (nil, false)
         }
 
@@ -181,7 +161,10 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
         return (backgroundStateTypeName, backgroundStateEnum)
     }
 
-    private static func handleStateEnum(in declaration: some DeclGroupSyntax, context: some MacroExpansionContext) throws -> (String, EnumDeclSyntax, Bool) {
+    private static func handleStateEnum(
+        in declaration: some DeclGroupSyntax,
+        context: some MacroExpansionContext
+    ) throws -> (String, EnumDeclSyntax, Bool) {
         let stateEnumName = "_State"
         let userDefinedStateEnum = declaration.memberBlock.members.compactMap { member -> EnumDeclSyntax? in
             guard let enumDecl = member.decl.as(EnumDeclSyntax.self) else {
@@ -236,19 +219,26 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
         return (stateEnumName, stateEnum, hasErrorState)
     }
 
-    private static func createActionEnum(named actionEnumName: String, from stateActionEnums: [EnumDeclSyntax], stateEnumName: String, backgroundStateTypeName: String) throws -> EnumDeclSyntax {
-        let hasCancelAction = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) } }.contains { enumCase in
-            enumCase.elements.contains { $0.name.text == "cancel" }
-        }
+    private static func createActionEnum(
+        named actionEnumName: String,
+        from stateActionEnums: [EnumDeclSyntax],
+        stateEnumName: String,
+        backgroundStateTypeName: String
+    ) throws -> EnumDeclSyntax {
+        let hasCancelAction = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) } }
+            .contains { enumCase in
+                enumCase.elements.contains { $0.name.text == "cancel" }
+            }
 
         var actionConformances = ["StateAction"]
         if hasCancelAction {
             actionConformances.append("WithCancelAction")
         }
 
-        let actionCases = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) } }.filter { caseDecl in
-            !caseDecl.elements.contains { $0.name.text == "error" }
-        }
+        let actionCases = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) } }
+            .filter { caseDecl in
+                !caseDecl.elements.contains { $0.name.text == "error" }
+            }
 
         return try EnumDeclSyntax("@CasePathable public enum \(raw: actionEnumName): \(raw: actionConformances.joined(separator: ", "))") {
             try TypeAliasDeclSyntax("public typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>")
@@ -257,11 +247,12 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
                 enumCase
             }
 
-            let transitionVariable = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(VariableDeclSyntax.self) } }.first { varDecl in
-                varDecl.bindings.contains { binding in
-                    binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "transition"
+            let transitionVariable = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(VariableDeclSyntax.self) } }
+                .first { varDecl in
+                    varDecl.bindings.contains { binding in
+                        binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "transition"
+                    }
                 }
-            }
 
             if let transitionVariable {
                 modifyTransitionVariable(transitionVariable)
@@ -296,16 +287,23 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
             }
             newSwitchString += "}"
 
-            let newBinding = transitionVariable.bindings.first?.with(\.accessorBlock, .init(accessors: .getter(CodeBlockItemListSyntax(stringLiteral: newSwitchString))))
+            let newBinding = transitionVariable.bindings.first?.with(
+                \.accessorBlock,
+                .init(accessors: .getter(CodeBlockItemListSyntax(stringLiteral: newSwitchString)))
+            )
             return transitionVariable.with(\.bindings, .init(arrayLiteral: newBinding!))
         }
 
         return transitionVariable
     }
 
-    private static func generateActionFunctions(from stateActionEnums: [EnumDeclSyntax], in declaration: some DeclGroupSyntax, context: some MacroExpansionContext) throws -> [DeclSyntax] {
+    private static func generateActionFunctions(
+        from stateActionEnums: [EnumDeclSyntax],
+        in declaration: some DeclGroupSyntax,
+        context: some MacroExpansionContext
+    ) throws -> [DeclSyntax] {
         var generatedActionFunctions: [DeclSyntax] = []
-        let allCases = stateActionEnums.flatMap { $0.memberBlock.members }.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }
+        let allCases = stateActionEnums.flatMap(\.memberBlock.members).compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }
 
         let hasErrorCase = allCases.contains { caseDecl in
             caseDecl.elements.contains { $0.name.text == "error" }
@@ -380,16 +378,20 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
                 }
                 generatedActionFunctions.append(DeclSyntax(syncFuncDecl))
 
-                let asyncFuncDecl = try FunctionDeclSyntax("public func \(raw: funcName)(\(raw: parameters.joined(separator: ", "))) async ") {
-                    StmtSyntax("\n\tawait core.\(raw: sendCall)")
-                }
+                let asyncFuncDecl =
+                    try FunctionDeclSyntax("public func \(raw: funcName)(\(raw: parameters.joined(separator: ", "))) async ") {
+                        StmtSyntax("\n\tawait core.\(raw: sendCall)")
+                    }
                 generatedActionFunctions.append(DeclSyntax(asyncFuncDecl))
             }
         }
         return generatedActionFunctions
     }
 
-    private static func processFunctionAttributes(in declaration: some DeclGroupSyntax, context _: some MacroExpansionContext) throws -> [String] {
+    private static func processFunctionAttributes(
+        in declaration: some DeclGroupSyntax,
+        context _: some MacroExpansionContext
+    ) throws -> [String] {
         let functionDecls = declaration.memberBlock.members.compactMap { member -> (FunctionDeclSyntax, LabeledExprListSyntax)? in
             guard let funcDecl = member.decl.as(FunctionDeclSyntax.self) else {
                 return nil
@@ -436,7 +438,11 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
         return coreProperty
     }
 
-    private static func createPublishedProperties(in declaration: some DeclGroupSyntax, stateEnumName: String, hasErrorState: Bool) -> [DeclSyntax] {
+    private static func createPublishedProperties(
+        in declaration: some DeclGroupSyntax,
+        stateEnumName: String,
+        hasErrorState: Bool
+    ) -> [DeclSyntax] {
         var newDecls: [DeclSyntax] = []
 
         let hasPublishedState = declaration.memberBlock.members.contains { member in
@@ -507,24 +513,28 @@ public struct StatefulMacro: MemberMacro, ExtensionMacro {
 
         return newDecls
     }
-    
+
     private static func createPublisherAssignments(hasErrorVariable: Bool) -> DeclSyntax {
         let errorAssignment = hasErrorVariable ? """
-                \ncore.$error
-                    .receive(on: DispatchQueue.main)
-                    .assign(to: &self.$error)
-                """ : ""
-        
+        \ncore.$error
+            .receive(on: DispatchQueue.main)
+            .assign(to: &self.$error)
+        """ : ""
+
         return """
-            private func setupPublisherAssignments() {
-                core.$state
-                    .receive(on: DispatchQueue.main)
-                    .assign(to: &self.$state)\(raw: errorAssignment)
-            }
-            """
+        private func setupPublisherAssignments() {
+            core.$state
+                .receive(on: DispatchQueue.main)
+                .assign(to: &self.$state)\(raw: errorAssignment)
+        }
+        """
     }
 
-    private static func createInitializer(in declaration: some DeclGroupSyntax, context: some MacroExpansionContext, node: AttributeSyntax) -> DeclSyntax? {
+    private static func createInitializer(
+        in declaration: some DeclGroupSyntax,
+        context: some MacroExpansionContext,
+        node: AttributeSyntax
+    ) -> DeclSyntax? {
         let hasInit = declaration.memberBlock.members.contains { member in
             member.decl.is(InitializerDeclSyntax.self)
         }
