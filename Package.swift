@@ -34,7 +34,13 @@ let package = Package(
                 .product(name: "CasePaths", package: "swift-case-paths"),
             ]
         ),
-        .target(name: "StatefulMacros", dependencies: ["StatefulMacrosMacros"]),
+        .target(
+            name: "StatefulMacros",
+            dependencies: [
+                "StatefulMacrosMacros",
+                .product(name: "CasePaths", package: "swift-case-paths"),
+            ]
+        ),
         .executableTarget(
             name: "StatefulMacrosClient",
             dependencies: [
