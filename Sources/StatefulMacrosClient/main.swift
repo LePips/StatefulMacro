@@ -32,15 +32,11 @@ class MyViewModel<P: Equatable>: ObservableObject {
     enum Action {
         case load
         case test(message: String)
-        case cancel
-        case error(Error)
 
         var transition: Transition {
             switch self {
             case .load:
 //                return .to(.loading, then: .content)
-                .background(.loading)
-            case .test:
                 .background(.loading)
             default:
                 .to(.initial)
@@ -54,9 +50,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
     enum State {
         case initial
-        case loading
         case content
-        case error
     }
 
     init(_ value: Int) {
@@ -73,7 +67,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
     }
 
     @Function(\Action.Cases.test)
-    private func printTest(string: String) async throws {
+    private func printTest(_ string: String) async throws {
         print("In printTest with string: \(string)")
 //        try await Task.sleep(for: .seconds(2))
     }

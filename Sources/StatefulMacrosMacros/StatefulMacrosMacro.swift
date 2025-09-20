@@ -422,7 +422,20 @@ public struct StatefulMacro: MemberMacro {
                 continue
             }
             let funcName = funcDecl.name.text
-            addFunctionStmts.append("core.addFunction(for: \\\(actionCasePath), function: self.\(funcName))")
+            let functionStmt: String
+
+            if funcDecl.signature.parameterClause.parameters.isEmpty {
+                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] in\n\ttry await self?.\(funcName)()\n})"
+            } else if funcDecl.signature.parameterClause.parameters.count == 1,
+                      let firstParam = funcDecl.signature.parameterClause.parameters.first
+            {
+                let paramName = firstParam.secondName?.text ?? firstParam.firstName.text
+                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramName) in\n\ttry await self?.\(funcName)(\(paramName))\n})"
+            } else {
+                let paramNames = funcDecl.signature.parameterClause.parameters.compactMap { $0.secondName?.text ?? $0.firstName.text }
+                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramNames.joined(separator: ", ")) in\n\ttry await self?.\(funcName)(\(paramNames.joined(separator: ", ")))\n})"
+            }
+            addFunctionStmts.append(functionStmt)
         }
         return addFunctionStmts
     }
