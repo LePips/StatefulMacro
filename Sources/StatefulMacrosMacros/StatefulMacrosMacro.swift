@@ -114,10 +114,11 @@ public struct StatefulMacro: MemberMacro {
         newDecls.append(contentsOf: createPublishedProperties(
             in: declaration,
             stateEnumName: stateEnumName,
-            hasErrorState: hasErrorState
+            hasErrorState: hasErrorState,
+            hasBackgroundStateType: backgroundStateEnum != nil
         ))
 
-        newDecls.append(createPublisherAssignments(hasErrorVariable: hasErrorState))
+        newDecls.append(createPublisherAssignments(hasErrorVariable: hasErrorState, hasBackgroundState: backgroundStateEnum != nil))
 
         if let initDecl = createInitializer(in: declaration, context: context, node: node) {
             newDecls.append(initDecl)
@@ -441,7 +442,8 @@ public struct StatefulMacro: MemberMacro {
     private static func createPublishedProperties(
         in declaration: some DeclGroupSyntax,
         stateEnumName: String,
-        hasErrorState: Bool
+        hasErrorState: Bool,
+        hasBackgroundStateType: Bool
     ) -> [DeclSyntax] {
         var newDecls: [DeclSyntax] = []
 
@@ -511,21 +513,35 @@ public struct StatefulMacro: MemberMacro {
             newDecls.append(stateVar)
         }
 
+        if hasBackgroundStateType {
+            let backgroundStateVar: DeclSyntax =
+                """
+                @Published public var backgroundStates: Set<_BackgroundState> = []
+                """
+            newDecls.append(backgroundStateVar)
+        }
+
         return newDecls
     }
 
-    private static func createPublisherAssignments(hasErrorVariable: Bool) -> DeclSyntax {
+    private static func createPublisherAssignments(hasErrorVariable: Bool, hasBackgroundState: Bool) -> DeclSyntax {
         let errorAssignment = hasErrorVariable ? """
         \ncore.$error
             .receive(on: DispatchQueue.main)
             .assign(to: &self.$error)
         """ : ""
 
+        let backgroundStateAssignment = hasBackgroundState ? """
+        \ncore.$backgroundStates
+            .receive(on: DispatchQueue.main)
+            .assign(to: &self.$backgroundStates)
+        """ : ""
+
         return """
         private func setupPublisherAssignments() {
             core.$state
                 .receive(on: DispatchQueue.main)
-                .assign(to: &self.$state)\(raw: errorAssignment)
+                .assign(to: &self.$state)\(raw: errorAssignment)\(raw: backgroundStateAssignment)
         }
         """
     }

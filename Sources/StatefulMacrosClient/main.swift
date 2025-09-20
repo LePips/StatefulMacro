@@ -38,11 +38,12 @@ class MyViewModel<P: Equatable>: ObservableObject {
         var transition: Transition {
             switch self {
             case .load:
-                return .to(.loading, then: .content)
+//                return .to(.loading, then: .content)
+                .background(.loading)
             case .test:
-                return .background(.loading)
+                .background(.loading)
             default:
-                return .to(.initial)
+                .to(.initial)
             }
         }
     }
@@ -68,26 +69,28 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
         try await Task.sleep(for: .seconds(2))
 
-        print("Done")
+        print("Loading done")
     }
 
     @Function(\Action.Cases.test)
-    private func printTest(string: String) {
+    private func printTest(string: String) async throws {
         print("In printTest with string: \(string)")
+//        try await Task.sleep(for: .seconds(2))
     }
 }
 
 asyncMain {
     let vm = MyViewModel<Int>(1)
 
-    let a = vm.$state
-        .sink { newState in
-            print("State changed to: \(newState)")
-        }
-
-    await vm.test(message: "The quick brown fox jumps over the lazy dog")
-    await vm.load()
+    let a = Task { await vm.load() }
 
     try await Task.sleep(for: .seconds(1))
-    a.cancel()
+
+    if vm.backgroundStates.contains(.loading) {
+        print("Background loading is in progress")
+    } else {
+        print("No background loading")
+    }
+
+    await a.value
 }

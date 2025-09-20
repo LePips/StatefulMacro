@@ -152,22 +152,6 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
         functionRegistry[action.hashValue] = registry
     }
 
-    public func send(_ action: CaseKeyPath<ActionType, Void>) {
-        send(action, ())
-    }
-
-    public func send<S: Sendable>(_ action: CaseKeyPath<ActionType, S>, _ payload: S) {
-        let newTask = Task {
-            await send(action, payload)
-        }
-
-        actionTasks[action.hashValue] = newTask
-    }
-
-    public func send(_ action: CaseKeyPath<ActionType, Void>) async {
-        await send(action, ())
-    }
-
     public func error(_ error: Error) {
         if let i = StateType.initial as? WithErrorState {
             let errorState = unpackErrorState(from: i)
@@ -183,7 +167,25 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
         }
     }
 
+    // MARK: - sync send
+
+    public func send(_ action: CaseKeyPath<ActionType, Void>) {
+        send(action, ())
+    }
+
+    public func send<S: Sendable>(_ action: CaseKeyPath<ActionType, S>, _ payload: S) {
+        let newTask = Task {
+            await send(action, payload)
+        }
+
+        actionTasks[action.hashValue] = newTask
+    }
+
     // MARK: - async send
+
+    public func send(_ action: CaseKeyPath<ActionType, Void>) async {
+        await send(action, ())
+    }
 
     @MainActor
     public func send<S: Sendable>(_ action: CaseKeyPath<ActionType, S>, _ payload: S) async {
@@ -191,7 +193,9 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
 
         // MARK: - cancel
 
-        if let a = extractedAction as? any WithCancelAction, isCancelAction(from: a) {
+        if let cancelActionType = extractedAction as? any WithCancelAction,
+           isCancelAction(from: cancelActionType)
+        {
             for task in actionTasks.values {
                 task.cancel()
             }
@@ -209,6 +213,24 @@ public class StateCore<StateType: CoreState, ActionType: StateAction>: Observabl
             return
         }
 
+        let newTask = Task {
+            await _run(
+                extractedAction: extractedAction,
+                action: action,
+                payload: payload
+            )
+        }
+
+        actionTasks[action.hashValue] = newTask
+
+        await newTask.value
+    }
+
+    private func _run<S: Sendable>(
+        extractedAction: ActionType,
+        action: CaseKeyPath<ActionType, S>,
+        payload: S
+    ) async {
         guard let register = functionRegistry[action.hashValue] as? ActionFunctionRegistry<S> else {
             assertionFailure("No handlers registered for action: \(action)")
             return
