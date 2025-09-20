@@ -76,7 +76,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
         try await Task.sleep(for: .seconds(2))
 
-        self.value = 123
+        events.send(.otherEvent)
         self.error(ErrorType.generic)
 
         print("Loading done")
@@ -91,13 +91,13 @@ class MyViewModel<P: Equatable>: ObservableObject {
 asyncMain {
     let vm = MyViewModel<Int>(1)
 
-//    let c = vm.events.sink { event in
-//        print(event, vm.error)
-//    }
-
-    let c = vm.$error.sink { error in
-        print("Error published: \(String(describing: error))")
+    let c = vm.events.sink { event in
+        print(event, vm.error)
     }
+
+//    let c = vm.$error.sink { error in
+//        print("Error published: \(String(describing: error))")
+//    }
 
     let d = vm.$value.sink { newValue in
         print("Value changed to \(newValue)")

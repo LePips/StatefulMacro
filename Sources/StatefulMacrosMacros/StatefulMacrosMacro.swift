@@ -99,6 +99,10 @@ public struct StatefulMacro: MemberMacro {
         public typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>
         """
 
+        let stateCoreTypeAlias: DeclSyntax = """
+        public typealias _StateCore = StateCore<\(raw: stateEnumName), \(raw: actionEnumName), \(raw: eventTypeName)>
+        """
+
         var newDecls: [DeclSyntax] = []
 
         if let eventEnum {
@@ -113,6 +117,7 @@ public struct StatefulMacro: MemberMacro {
             DeclSyntax(stateEnum),
             DeclSyntax(actionEnum),
             transitionTypeAlias,
+            stateCoreTypeAlias,
             coreProperty,
         ])
 
@@ -503,8 +508,8 @@ public struct StatefulMacro: MemberMacro {
     ) -> DeclSyntax {
         let coreProperty: DeclSyntax =
             """
-            private lazy var core: StateCore<\(raw: stateEnumName), \(raw: actionEnumName), \(raw: eventTypeName)> = {
-                let core = StateCore<\(raw: stateEnumName), \(raw: actionEnumName), \(raw: eventTypeName)>()
+            private lazy var core: _StateCore = {
+                let core = _StateCore()
                 \(raw: addFunctionStmts.joined(separator: "\n\n"))
 
                 setupPublisherAssignments(core: core)
@@ -576,7 +581,7 @@ public struct StatefulMacro: MemberMacro {
         """ : ""
 
         return """
-        private func setupPublisherAssignments(core: StateCore<_State, _Action, _Event>) {
+        private func setupPublisherAssignments(core: _StateCore) {
             core.$state
                 .receive(on: DispatchQueue.main)
                 .assign(to: &self.$state)\(raw: errorAssignment)\(raw: backgroundStateAssignment)

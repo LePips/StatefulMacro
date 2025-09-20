@@ -10,7 +10,7 @@ public struct EventPublisher<T>: Publisher {
         subject.receive(subscriber: subscriber)
     }
 
-    func send(_ value: T) {
+    public func send(_ value: T) {
         subject.send(value)
     }
 }
