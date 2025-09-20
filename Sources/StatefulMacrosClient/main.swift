@@ -42,8 +42,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
         var transition: Transition {
             switch self {
             case .load:
-                //                return .to(.loading, then: .content)
-                .background(.loading)
+                .loop(.loading)
             default:
                 .to(.initial)
             }
@@ -61,8 +60,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
     enum State {
         case initial
-        case content
-//        case error
+        case loading
     }
 
     @Published
@@ -93,17 +91,17 @@ class MyViewModel<P: Equatable>: ObservableObject {
 asyncMain {
     let vm = MyViewModel<Int>(1)
 
-    let c = vm.events.sink { event in
-        print(event, vm.error)
+    let c = vm.$state.sink { state in
+        print("State changed to \(state)")
     }
 
 //    let c = vm.$error.sink { error in
 //        print("Error published: \(String(describing: error))")
 //    }
 
-    let d = vm.$value.sink { newValue in
-        print("Value changed to \(newValue)")
-    }
+//    let d = vm.$value.sink { newValue in
+//        print("Value changed to \(newValue)")
+//    }
 
     let a = Task { await vm.load() }
 
@@ -118,5 +116,5 @@ asyncMain {
     await a.value
 
     c.cancel()
-    d.cancel()
+//    d.cancel()
 }

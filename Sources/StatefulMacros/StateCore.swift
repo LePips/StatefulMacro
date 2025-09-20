@@ -49,17 +49,20 @@ public struct StateTransition<
     let final: StateType?
     let background: BackgroundStateType?
     let goToFinalOnError: Bool
+    let goToStartOnCompletion: Bool
 
-    private init(
+    fileprivate init(
         start: StateType? = nil,
         final: StateType? = nil,
         background: BackgroundStateType? = nil,
-        goToFinalOnError: Bool = false
+        goToFinalOnError: Bool = false,
+        goToStartOnCompletion: Bool = false
     ) {
         self.start = start
         self.final = final
         self.background = background
         self.goToFinalOnError = goToFinalOnError
+        self.goToStartOnCompletion = goToStartOnCompletion
     }
 
     public static var identity: Self {
@@ -102,6 +105,17 @@ public struct StateTransition<
             final: final,
             background: nil,
             goToFinalOnError: true
+        )
+    }
+
+    public static func loop(
+        _ state: StateType
+    ) -> Self {
+        .init(
+            start: state,
+            final: nil,
+            background: nil,
+            goToStartOnCompletion: true
         )
     }
 
@@ -280,12 +294,19 @@ public class StateCore<
             return
         }
 
+        let finalState: StateType? = {
+            if extractedAction.transition.goToStartOnCompletion {
+                return self.state
+            } else {
+                return extractedAction.transition.final
+            }
+        }()
+
         if let newState = extractedAction.transition.start {
             await MainActor.run {
                 self.state = newState
             }
         }
-        let finalState = extractedAction.transition.final
 
         let backgroundState = extractedAction.transition.background
 
