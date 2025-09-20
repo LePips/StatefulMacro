@@ -206,6 +206,8 @@ public struct StatefulMacro: MemberMacro {
                 conformances.append("WithErrorEvent")
             }
 
+            let conformancesString = conformances.isEmpty ? "" : ": \(conformances.joined(separator: ", "))"
+
             let newCases = userDefinedEventEnum.memberBlock.members.filter { member in
                 guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self) else {
                     return true
@@ -213,7 +215,7 @@ public struct StatefulMacro: MemberMacro {
                 return !caseDecl.elements.contains { $0.name.text == "error" }
             }
 
-            eventEnum = try EnumDeclSyntax("public enum \(raw: newName): \(raw: conformances.joined(separator: ", "))") {
+            eventEnum = try EnumDeclSyntax("public enum \(raw: newName)\(raw: conformancesString)") {
                 for member in newCases {
                     member
                 }
