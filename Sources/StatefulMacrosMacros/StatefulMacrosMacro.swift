@@ -44,8 +44,57 @@ struct ActionFunctionConflictError: DiagnosticMessage, Error {
     var severity: DiagnosticSeverity { .error }
 }
 
+enum TransitionError: DiagnosticMessage, Error {
+    case invalidFunction(name: String)
+    case invalidStructure
+
+    var message: String {
+        switch self {
+        case let .invalidFunction(name):
+            return "Invalid transition function '\(name)'. Only `identity`, `to`, `background`, and `loop` are permitted."
+        case .invalidStructure:
+            return "`transition` must be a direct call to a transition function or a switch statement whose cases return a transition function."
+        }
+    }
+
+    var diagnosticID: MessageID {
+        let id: String
+        switch self {
+        case .invalidFunction:
+            id = "invalidTransitionFunction"
+        case .invalidStructure:
+            id = "invalidTransitionStructure"
+        }
+        return MessageID(domain: "com.statefulmacro", id: id)
+    }
+
+    var severity: DiagnosticSeverity { .error }
+}
+
+struct DebugError: DiagnosticMessage, Error {
+
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+
+    var diagnosticID: MessageID {
+        MessageID(domain: "com.statefulmacro", id: "internalError")
+    }
+
+    var severity: DiagnosticSeverity { .error }
+}
+
 /// Implementation of the `@Stateful` member macro.
 public struct StatefulMacro: MemberMacro {
+
+    static let validTransitionFunctions: Set<String> = [
+        "identity",
+        "to",
+        "background",
+        "loop",
+    ]
 
     // MARK: - Member Macro
 
@@ -74,18 +123,21 @@ public struct StatefulMacro: MemberMacro {
         let (eventTypeName, eventEnum, hasErrorEvent) = try handleEventEnum(in: declaration)
 
         let actionEnumName = "_Action"
-        let actionEnum = try createActionEnum(
-            named: actionEnumName,
-            from: stateActionEnums,
-            stateEnumName: stateEnumName,
-            backgroundStateTypeName: backgroundStateTypeName
-        )
 
-        let generatedActionFunctions = try generateActionFunctions(
+        let (generatedActionFunctions, hasErrorAction) = try generateActionFunctions(
             from: stateActionEnums,
             in: declaration,
             context: context,
             hasError: hasErrorState || hasErrorEvent
+        )
+
+        let actionEnum = try createActionEnum(
+            named: actionEnumName,
+            from: stateActionEnums,
+            stateEnumName: stateEnumName,
+            backgroundStateTypeName: backgroundStateTypeName,
+            hasErrorCase: hasErrorAction,
+            context: context
         )
 
         let addFunctionStmts = try processFunctionAttributes(in: declaration, context: context)
@@ -121,6 +173,10 @@ public struct StatefulMacro: MemberMacro {
             stateCoreTypeAlias,
             coreProperty,
         ])
+
+        if backgroundStateEnum != nil {
+            newDecls.append(createBackgroundFunctions())
+        }
 
         newDecls.append(contentsOf: generatedActionFunctions)
         newDecls.append(contentsOf: createPublishedProperties(
@@ -287,7 +343,9 @@ public struct StatefulMacro: MemberMacro {
         named actionEnumName: String,
         from stateActionEnums: [EnumDeclSyntax],
         stateEnumName: String,
-        backgroundStateTypeName: String
+        backgroundStateTypeName: String,
+        hasErrorCase: Bool,
+        context: some MacroExpansionContext
     ) throws -> EnumDeclSyntax {
         let hasCancelAction = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) } }
             .contains { enumCase in
@@ -311,7 +369,8 @@ public struct StatefulMacro: MemberMacro {
                 enumCase
             }
 
-            let transitionVariable = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(VariableDeclSyntax.self) } }
+            let transitionVariable: VariableDeclSyntax? = stateActionEnums
+                .flatMap { $0.memberBlock.members.compactMap { $0.decl.as(VariableDeclSyntax.self) } }
                 .first { varDecl in
                     varDecl.bindings.contains { binding in
                         binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text == "transition"
@@ -319,6 +378,11 @@ public struct StatefulMacro: MemberMacro {
                 }
 
             if let transitionVariable {
+                let _ = try verifyTransitionVariable(
+                    transitionVariable,
+                    hasErrorCase: hasErrorCase,
+                    in: context
+                )
                 modifyTransitionVariable(transitionVariable)
             } else {
                 try VariableDeclSyntax("public var transition: Transition") {
@@ -361,20 +425,99 @@ public struct StatefulMacro: MemberMacro {
         return transitionVariable
     }
 
+    private static func verifyTransitionVariable(
+        _ variable: VariableDeclSyntax,
+        hasErrorCase: Bool,
+        in context: some MacroExpansionContext
+    ) throws {
+        guard let binding = variable.bindings.first,
+              let accessorBlock = binding.accessorBlock
+        else {
+            return
+        }
+
+        let statements: CodeBlockItemListSyntax
+        switch accessorBlock.accessors {
+        case let .getter(getterStatements):
+            statements = getterStatements
+        case let .accessors(accessorList):
+            guard let getter = accessorList.first(where: { $0.accessorSpecifier.text == "get" }),
+                  let body = getter.body
+            else {
+                return
+            }
+            statements = body.statements
+        }
+
+        guard let firstStatement = statements.first?.item else {
+            return
+        }
+
+        if let returnStmt = firstStatement.as(ReturnStmtSyntax.self), let expression = returnStmt.expression {
+            try verifyExpression(expression, in: context)
+        } else {
+            try verifyExpression(firstStatement, in: context)
+        }
+    }
+
+    private static func verifyExpression(_ expression: some SyntaxProtocol, in context: some MacroExpansionContext) throws {
+        if let functionCall = expression.as(FunctionCallExprSyntax.self) {
+            try verifyFunctionCall(functionCall, in: context)
+        } else if let expressionStmt = expression.as(ExpressionStmtSyntax.self),
+                  let switchExpr = expressionStmt.expression.as(SwitchExprSyntax.self)
+        {
+            for aCase in switchExpr.cases {
+                if let caseBlock = aCase.as(SwitchCaseSyntax.self) {
+                    for statement in caseBlock.statements {
+                        if let returnStmt = statement.item.as(ReturnStmtSyntax.self) {
+                            try verifyExpression(returnStmt.expression!, in: context)
+                        } else {
+                            try verifyExpression(statement.item, in: context)
+                        }
+                    }
+                }
+            }
+        } else if let memberAccess = expression.as(MemberAccessExprSyntax.self) {
+            // This handles cases like `.identity`
+            let functionName = memberAccess.declName.baseName.text
+            if !validTransitionFunctions.contains(functionName) {
+                let diagnostic = Diagnostic(node: Syntax(memberAccess), message: TransitionError.invalidFunction(name: functionName))
+                context.diagnose(diagnostic)
+            }
+        } else {
+            let diagnostic = Diagnostic(node: Syntax(expression), message: TransitionError.invalidStructure)
+            context.diagnose(diagnostic)
+        }
+    }
+
+    private static func verifyFunctionCall(_ functionCall: FunctionCallExprSyntax, in context: some MacroExpansionContext) throws {
+        guard let calledExpression = functionCall.calledExpression.as(MemberAccessExprSyntax.self) else {
+            let diagnostic = Diagnostic(node: Syntax(functionCall), message: TransitionError.invalidStructure)
+            context.diagnose(diagnostic)
+            return
+        }
+
+        let functionName = calledExpression.declName.baseName.text
+        if !validTransitionFunctions.contains(functionName) {
+            let diagnostic = Diagnostic(node: Syntax(functionCall), message: TransitionError.invalidFunction(name: functionName))
+            context.diagnose(diagnostic)
+        }
+    }
+
     private static func generateActionFunctions(
         from stateActionEnums: [EnumDeclSyntax],
         in declaration: some DeclGroupSyntax,
         context: some MacroExpansionContext,
         hasError: Bool,
-    ) throws -> [DeclSyntax] {
+    ) throws -> ([DeclSyntax], Bool) {
         var generatedActionFunctions: [DeclSyntax] = []
         let allCases = stateActionEnums.flatMap(\.memberBlock.members).compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }
 
-        let hasErrorCase = allCases.contains { caseDecl in
+        let hasErrorAction = allCases.contains { caseDecl in
             caseDecl.elements.contains { $0.name.text == "error" }
         }
 
-        if hasErrorCase || hasError {
+        if hasErrorAction || hasError {
             let errorFunc = try FunctionDeclSyntax("public func error(_ error: Error)") {
                 StmtSyntax("\n\tcore.error(error)")
             }
@@ -450,7 +593,8 @@ public struct StatefulMacro: MemberMacro {
                 generatedActionFunctions.append(DeclSyntax(asyncFuncDecl))
             }
         }
-        return generatedActionFunctions
+
+        return (generatedActionFunctions, hasErrorAction)
     }
 
     private static func processFunctionAttributes(
@@ -589,6 +733,23 @@ public struct StatefulMacro: MemberMacro {
             core.$state
                 .receive(on: DispatchQueue.main)
                 .assign(to: &self.$state)\(raw: errorAssignment)\(raw: backgroundStateAssignment)
+        }
+        """
+    }
+
+    private static func createBackgroundFunctions() -> DeclSyntax {
+        """
+        public func backgound(
+            _ action: CaseKeyPath<_Action, Void>
+        ) {
+            core.send(action, background: true)
+        }
+
+        public func backgound<S: Sendable>(
+            _ action: CaseKeyPath<_Action, S>,
+            _ payload: S
+        ) {
+            core.send(action, payload, background: true)
         }
         """
     }

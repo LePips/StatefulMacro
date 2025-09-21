@@ -37,21 +37,14 @@ class MyViewModel<P: Equatable>: ObservableObject {
         case cancel
         case load
         case test(message: String)
-        case error
 
         var transition: Transition {
             switch self {
-            case .load:
-                .loop(.loading)
-            default:
-                .to(.initial)
+            case .load: .to(.loading, whenBackground: .loading)
+            case .cancel: .to(.initial)
+            case .test: .identity
             }
         }
-    }
-
-    enum Event {
-        case error
-        case otherEvent
     }
 
     enum BackgroundState {
@@ -76,8 +69,10 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
         try await Task.sleep(for: .seconds(2))
 
-        events.send(.otherEvent)
-        self.error(ErrorType.generic)
+//        events.send(.otherEvent)
+//        self.error(ErrorType.generic)
+
+        print(backgroundStates)
 
         print("Loading done")
     }
@@ -103,9 +98,7 @@ asyncMain {
 //        print("Value changed to \(newValue)")
 //    }
 
-    let a = Task { await vm.load() }
-
-    try await Task.sleep(for: .seconds(0.5))
+    vm.backgound(\.test, "Hello there")
 
     if vm.backgroundStates.contains(.loading) {
         print("Background loading is in progress")
@@ -113,7 +106,11 @@ asyncMain {
         print("No background loading")
     }
 
-    await a.value
+    try await Task.sleep(for: .seconds(3))
+
+//    await a.value
+
+    print(vm.backgroundStates)
 
     c.cancel()
 //    d.cancel()
