@@ -739,13 +739,13 @@ public struct StatefulMacro: MemberMacro {
 
     private static func createBackgroundFunctions() -> DeclSyntax {
         """
-        public func backgound(
+        public func background(
             _ action: CaseKeyPath<_Action, Void>
         ) {
             core.send(action, background: true)
         }
 
-        public func backgound<S: Sendable>(
+        public func background<S: Sendable>(
             _ action: CaseKeyPath<_Action, S>,
             _ payload: S
         ) {

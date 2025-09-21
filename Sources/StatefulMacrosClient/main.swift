@@ -98,7 +98,8 @@ asyncMain {
 //        print("Value changed to \(newValue)")
 //    }
 
-    vm.backgound(\.test, "Hello there")
+//    vm.backgound(\.test, "Hello there")
+    vm.background(\.load)
 
     if vm.backgroundStates.contains(.loading) {
         print("Background loading is in progress")
