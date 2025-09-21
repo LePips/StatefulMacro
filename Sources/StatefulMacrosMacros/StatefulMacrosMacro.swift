@@ -51,7 +51,7 @@ enum TransitionError: DiagnosticMessage, Error {
     var message: String {
         switch self {
         case let .invalidFunction(name):
-            return "Invalid transition function '\(name)'. Only `identity`, `to`, `background`, and `loop` are permitted."
+            return "Invalid transition function '\(name)'. Only `none`, `to`, `background`, and `loop` are permitted."
         case .invalidStructure:
             return "`transition` must be a direct call to a transition function or a switch statement whose cases return a transition function."
         }
@@ -90,7 +90,7 @@ struct DebugError: DiagnosticMessage, Error {
 public struct StatefulMacro: MemberMacro {
 
     static let validTransitionFunctions: Set<String> = [
-        "identity",
+        "none",
         "to",
         "background",
         "loop",
@@ -387,7 +387,7 @@ public struct StatefulMacro: MemberMacro {
                 modifyTransitionVariable(transitionVariable)
             } else {
                 try VariableDeclSyntax("public var transition: Transition") {
-                    StmtSyntax("return .identity")
+                    StmtSyntax("return .none")
                 }
             }
         }
@@ -479,7 +479,7 @@ public struct StatefulMacro: MemberMacro {
                 }
             }
         } else if let memberAccess = expression.as(MemberAccessExprSyntax.self) {
-            // This handles cases like `.identity`
+            // This handles cases like `.none`
             let functionName = memberAccess.declName.baseName.text
             if !validTransitionFunctions.contains(functionName) {
                 let diagnostic = Diagnostic(node: Syntax(memberAccess), message: TransitionError.invalidFunction(name: functionName))
@@ -519,10 +519,6 @@ public struct StatefulMacro: MemberMacro {
         }
 
         if hasErrorAction || hasError {
-//            let errorFunc = try FunctionDeclSyntax("public func error(_ error: Error)") {
-//                StmtSyntax("\n\tcore.error(error)")
-//            }
-
             let errorFunc = (
                 "public func error(_ error: Error)",
                 "\n\tcore.error(error)"

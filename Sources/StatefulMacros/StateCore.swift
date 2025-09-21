@@ -66,7 +66,7 @@ public struct StateTransition<
         self.goToStartOnCompletion = goToStartOnCompletion
     }
 
-    public static var identity: Self {
+    public static var none: Self {
         .init(
             start: nil,
             final: nil,
@@ -354,6 +354,7 @@ public class StateCore<
             }
         }()
 
+        let stateBeforeTransition = self.state
         let startState: StateType? = transition.start
 
         if let startState, !background {
@@ -399,7 +400,7 @@ public class StateCore<
         if let _error {
             self.error(
                 _error,
-                startState: startState
+                startState: stateBeforeTransition
             )
         } else if let finalState {
             await MainActor.run {
