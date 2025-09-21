@@ -364,7 +364,7 @@ public class StateCore<
 
         let backgroundState = transition.background
 
-        if let backgroundState {
+        if let backgroundState, transition.isBackground || background {
             await MainActor.run {
                 _ = self.backgroundStates.insert(backgroundState)
             }

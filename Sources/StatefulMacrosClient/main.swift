@@ -34,14 +34,14 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
     @CasePathable
     enum Action {
-        case cancel
+        case asdf
         case load
         case test(message: String)
 
         var transition: Transition {
             switch self {
             case .load: .to(.loading, whenBackground: .loading)
-            case .cancel: .to(.initial)
+            case .asdf: .to(.initial)
             case .test: .identity
             }
         }
@@ -69,9 +69,6 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
         try await Task.sleep(for: .seconds(2))
 
-//        events.send(.otherEvent)
-//        self.error(ErrorType.generic)
-
         print(backgroundStates)
 
         print("Loading done")
@@ -82,6 +79,24 @@ class MyViewModel<P: Equatable>: ObservableObject {
         print("In printTest with string: \(string)")
     }
 }
+
+// @MainActor
+// public struct _BackgroundActions {
+//
+//    init(core: _StateCore) {
+//        self.core = core
+//    }
+//
+//    private let core: _StateCore
+//
+//    public func load() {
+//        core.send(\.load, background: true)
+//    }
+//
+//    public func test(message: String) {
+//        core.send(\.test, message, background: true)
+//    }
+// }
 
 asyncMain {
     let vm = MyViewModel<Int>(1)
@@ -99,7 +114,8 @@ asyncMain {
 //    }
 
 //    vm.backgound(\.test, "Hello there")
-    vm.background(\.load)
+    vm.background.test(message: "Hello there")
+//    await vm.load()
 
     if vm.backgroundStates.contains(.loading) {
         print("Background loading is in progress")

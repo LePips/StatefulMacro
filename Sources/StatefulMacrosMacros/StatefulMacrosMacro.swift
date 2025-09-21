@@ -175,10 +175,11 @@ public struct StatefulMacro: MemberMacro {
         ])
 
         if backgroundStateEnum != nil {
-            newDecls.append(createBackgroundFunctions())
+            newDecls.append(createBackgroundStruct(actionFunctions: generatedActionFunctions))
+            newDecls.append(createBackgroundProperty())
         }
 
-        newDecls.append(contentsOf: generatedActionFunctions)
+        try newDecls.append(contentsOf: generatedActionFunctions.map(buildFunction))
         newDecls.append(contentsOf: createPublishedProperties(
             in: declaration,
             stateEnumName: stateEnumName,
@@ -509,8 +510,8 @@ public struct StatefulMacro: MemberMacro {
         in declaration: some DeclGroupSyntax,
         context: some MacroExpansionContext,
         hasError: Bool,
-    ) throws -> ([DeclSyntax], Bool) {
-        var generatedActionFunctions: [DeclSyntax] = []
+    ) throws -> ([FunctionSyntaxPair], Bool) {
+        var generatedActionFunctions: [FunctionSyntaxPair] = []
         let allCases = stateActionEnums.flatMap(\.memberBlock.members).compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }
 
         let hasErrorAction = allCases.contains { caseDecl in
@@ -518,10 +519,15 @@ public struct StatefulMacro: MemberMacro {
         }
 
         if hasErrorAction || hasError {
-            let errorFunc = try FunctionDeclSyntax("public func error(_ error: Error)") {
-                StmtSyntax("\n\tcore.error(error)")
-            }
-            generatedActionFunctions.append(DeclSyntax(errorFunc))
+//            let errorFunc = try FunctionDeclSyntax("public func error(_ error: Error)") {
+//                StmtSyntax("\n\tcore.error(error)")
+//            }
+
+            let errorFunc = (
+                "public func error(_ error: Error)",
+                "\n\tcore.error(error)"
+            )
+            generatedActionFunctions.append(errorFunc)
         }
 
         let nonErrorCases = allCases.filter { caseDecl in
@@ -581,20 +587,31 @@ public struct StatefulMacro: MemberMacro {
                     sendCall = "send(\(casePath), \(tuple))"
                 }
 
-                let syncFuncDecl = try FunctionDeclSyntax("public func \(raw: funcName)(\(raw: parameters.joined(separator: ", ")))") {
-                    StmtSyntax("\n\tcore.\(raw: sendCall)")
-                }
-                generatedActionFunctions.append(DeclSyntax(syncFuncDecl))
+                let syncFuncDecl = (
+                    "public func \(funcName)(\(parameters.joined(separator: ", ")))",
+                    "\n\tcore.\(sendCall)"
+                )
+                generatedActionFunctions.append(syncFuncDecl)
 
-                let asyncFuncDecl =
-                    try FunctionDeclSyntax("public func \(raw: funcName)(\(raw: parameters.joined(separator: ", "))) async ") {
-                        StmtSyntax("\n\tawait core.\(raw: sendCall)")
-                    }
-                generatedActionFunctions.append(DeclSyntax(asyncFuncDecl))
+                let asyncFuncDecl = (
+                    "public func \(funcName)(\(parameters.joined(separator: ", "))) async ",
+                    "\n\tawait core.\(sendCall)"
+                )
+                generatedActionFunctions.append(asyncFuncDecl)
             }
         }
 
         return (generatedActionFunctions, hasErrorAction)
+    }
+
+    typealias FunctionSyntaxPair = (String, String)
+
+    private static func buildFunction(_ functionDecl: String, _ stmtSyntax: String) throws -> DeclSyntax {
+        let f = try FunctionDeclSyntax("\(raw: functionDecl)") {
+            StmtSyntax("\(raw: stmtSyntax)")
+        }
+
+        return DeclSyntax(f)
     }
 
     private static func processFunctionAttributes(
@@ -737,20 +754,65 @@ public struct StatefulMacro: MemberMacro {
         """
     }
 
-    private static func createBackgroundFunctions() -> DeclSyntax {
-        """
-        public func background(
-            _ action: CaseKeyPath<_Action, Void>
-        ) {
-            core.send(action, background: true)
+    private static func generateFunctionCall(
+        functionName: String,
+        parameters: [FunctionParameterSyntax],
+        isAsync: Bool,
+        isBackground: Bool
+    ) -> String {
+        let paramNames = parameters.compactMap { $0.secondName?.text ?? $0.firstName.text }
+        let paramList = paramNames.joined(separator: ", ")
+        let backgroundPrefix = isBackground ? "background: true" : ""
+        let awaitPrefix = isAsync ? "await " : ""
+
+        if paramNames.isEmpty {
+            return "\(awaitPrefix)core.send(\\.\\(functionName), \(backgroundPrefix))"
+        } else if paramNames.count == 1 {
+            return "\(awaitPrefix)core.send(\\.\\(functionName), \(paramList), \(backgroundPrefix))"
+        } else {
+            return "\(awaitPrefix)core.send(\\.\\(functionName), (\(paramList)), \(backgroundPrefix))"
+        }
+    }
+
+    private static func createBackgroundStruct(
+        actionFunctions: [FunctionSyntaxPair]
+    ) -> DeclSyntax {
+
+        let syncFunctions = actionFunctions.filter { functionDecl, _ in
+            !functionDecl.contains(" async")
         }
 
-        public func background<S: Sendable>(
-            _ action: CaseKeyPath<_Action, S>,
-            _ payload: S
-        ) {
-            core.send(action, payload, background: true)
+        let functionStrings = syncFunctions.map { functionDecl, stmt in
+            var backgroundedStatement = stmt
+            backgroundedStatement.removeLast()
+            backgroundedStatement.append(", background: true)")
+
+            return """
+            \(functionDecl) {
+                \(backgroundedStatement)
+            }
+            """
+        }.joined(separator: "\n\n")
+
+        return """
+        @MainActor
+        struct _BackgroundActions {
+            private let core: _StateCore
+
+            init(core: _StateCore) {
+                self.core = core
+            }
+
+            \(raw: functionStrings)
         }
+        """
+    }
+
+    private static func createBackgroundProperty() -> DeclSyntax {
+        """
+        public lazy var background: _BackgroundActions = {
+            _BackgroundActions(core: core)
+        }()
         """
     }
 }
