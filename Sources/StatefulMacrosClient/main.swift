@@ -54,6 +54,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
     enum State {
         case initial
         case loading
+        case error
     }
 
     @Published

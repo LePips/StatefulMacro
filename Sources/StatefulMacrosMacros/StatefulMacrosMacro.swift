@@ -781,6 +781,9 @@ public struct StatefulMacro: MemberMacro {
         let syncFunctions = actionFunctions.filter { functionDecl, _ in
             !functionDecl.contains(" async")
         }
+        .filter { functionDecl, _ in
+            !functionDecl.contains("func error(")
+        }
 
         let functionStrings = syncFunctions.map { functionDecl, stmt in
             var backgroundedStatement = stmt
