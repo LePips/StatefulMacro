@@ -2,6 +2,10 @@ import CasePaths
 import Foundation
 import StatefulMacros
 
+// TODO: background struct holds background states
+// TODO: background state with ids
+// TODO: cancel with id
+
 @MainActor
 func asyncMain(execute work: @escaping () async throws -> Void) {
     class State {
@@ -34,15 +38,20 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
     @CasePathable
     enum Action {
-        case asdf
+        case cancel
+        case error
         case load
-        case test(message: String)
+        case smile
 
         var transition: Transition {
             switch self {
-            case .load: .to(.loading, whenBackground: .loading)
-            case .asdf: .to(.initial)
-            case .test: .identity
+            case .error, .cancel: .none
+            case .load:
+                .to(.loading, then: .content)
+                    .whenBackground(.loading)
+                    .required(.initial)
+                    .invalid(.loading)
+            case .smile: .background(.loading)
             }
         }
     }
@@ -50,11 +59,16 @@ class MyViewModel<P: Equatable>: ObservableObject {
     enum BackgroundState {
         case loading
     }
+    
+    enum Event {
+        case foo
+    }
 
     enum State {
+        case error
         case initial
         case loading
-        case error
+        case content
     }
 
     @Published
@@ -64,40 +78,33 @@ class MyViewModel<P: Equatable>: ObservableObject {
         self.value = value
     }
 
+    @Function(\Action.Cases.error)
+    private func onError(_ error: Error) {
+        print("onError")
+    }
+
+    @Function(\Action.Cases.error)
+    private func onError2(_ error: Error) {
+        print("onError2")
+    }
+
     @Function(\Action.Cases.load)
-    private func aload() async throws {
-        print("Loading...")
+    private func _load() async throws {
+        print("Loading... \(Task.isCancelled)")
 
         try await Task.sleep(for: .seconds(2))
 
-        print(backgroundStates)
+//        await self.error(ErrorType.generic)
 
-        print("Loading done")
+        print("SHOULD NOT HAVE PRINTED, \(Task.isCancelled)")
     }
 
-    @Function(\Action.Cases.test)
-    private func printTest(_ string: String) async throws {
-        print("In printTest with string: \(string)")
+    @Function(\Action.Cases.smile)
+    private func _smile() async throws {
+        try await Task.sleep(for: .seconds(0.5))
+        print("Smile! \(Task.isCancelled)")
     }
 }
-
-// @MainActor
-// public struct _BackgroundActions {
-//
-//    init(core: _StateCore) {
-//        self.core = core
-//    }
-//
-//    private let core: _StateCore
-//
-//    public func load() {
-//        core.send(\.load, background: true)
-//    }
-//
-//    public func test(message: String) {
-//        core.send(\.test, message, background: true)
-//    }
-// }
 
 asyncMain {
     let vm = MyViewModel<Int>(1)
@@ -105,31 +112,20 @@ asyncMain {
     let c = vm.$state.sink { state in
         print("State changed to \(state)")
     }
-
-//    let c = vm.$error.sink { error in
-//        print("Error published: \(String(describing: error))")
-//    }
-
-//    let d = vm.$value.sink { newValue in
-//        print("Value changed to \(newValue)")
-//    }
-
-//    vm.backgound(\.test, "Hello there")
-    vm.background.test(message: "Hello there")
-//    await vm.load()
-
-    if vm.backgroundStates.contains(.loading) {
-        print("Background loading is in progress")
-    } else {
-        print("No background loading")
+    
+    let b = vm.background.$states.sink { state in
+        print("Background states changed to \(state)")
+    }
+    
+    let aa = vm.actions.sink { action in
+        print("-- Action: \(action)")
     }
 
-    try await Task.sleep(for: .seconds(3))
-
-//    await a.value
-
-    print(vm.backgroundStates)
+    await vm.smile()
+    await vm.load()
 
     c.cancel()
+    b.cancel()
+    aa.cancel()
 //    d.cancel()
 }

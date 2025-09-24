@@ -10,161 +10,6 @@ import Foundation
 // TODO: - when error occurs but there is no error state
 //       - go to starting state, final state
 
-// TODO: implement
-enum StateTransitionTaskRepeatBehavior {
-    case cancel
-    case wait(count: Int)
-}
-
-public protocol CoreState {
-    static var initial: Self { get }
-}
-
-public protocol WithErrorState: CoreState {
-    static var error: Self { get }
-}
-
-public protocol StateTransitional {
-    associatedtype BackgroundStateType: Hashable = Never
-    associatedtype StateType: CoreState
-
-    typealias Transition = StateTransition<StateType, BackgroundStateType>
-
-    var transition: Transition { get }
-}
-
-public protocol StateAction: StateTransitional, CasePathIterable, Equatable {}
-
-public protocol WithCancelAction: StateAction {
-    static var cancel: Self { get }
-}
-
-public protocol WithErrorEvent: Equatable {}
-
-public struct StateTransition<
-    StateType,
-    BackgroundStateType: Hashable
-> {
-    let start: StateType?
-    let final: StateType?
-    let background: BackgroundStateType?
-    let goToStartOnCompletion: Bool
-
-    var isBackground: Bool {
-        start == nil && final == nil && background != nil
-    }
-
-    fileprivate init(
-        start: StateType? = nil,
-        final: StateType? = nil,
-        background: BackgroundStateType? = nil,
-        goToStartOnCompletion: Bool = false
-    ) {
-        self.start = start
-        self.final = final
-        self.background = background
-        self.goToStartOnCompletion = goToStartOnCompletion
-    }
-
-    public static var none: Self {
-        .init(
-            start: nil,
-            final: nil,
-            background: nil
-        )
-    }
-
-    public static func to(
-        _ start: StateType
-    ) -> Self {
-        .init(
-            start: start,
-            final: nil,
-            background: nil
-        )
-    }
-
-    public static func to(
-        _ start: StateType,
-        then final: StateType
-    ) -> Self {
-        .init(
-            start: start,
-            final: final,
-            background: nil
-        )
-    }
-
-    public static func loop(
-        _ state: StateType
-    ) -> Self {
-        .init(
-            start: state,
-            final: nil,
-            background: nil,
-            goToStartOnCompletion: true
-        )
-    }
-
-    public static func to(
-        _ start: StateType,
-        whenBackground background: BackgroundStateType
-    ) -> Self {
-        .init(
-            start: start,
-            final: nil,
-            background: background
-        )
-    }
-
-    public static func to(
-        _ start: StateType,
-        then final: StateType,
-        whenBackground background: BackgroundStateType
-    ) -> Self {
-        .init(
-            start: start,
-            final: final,
-            background: background
-        )
-    }
-
-    public static func loop(
-        _ state: StateType,
-        whenBackground background: BackgroundStateType
-    ) -> Self {
-        .init(
-            start: state,
-            final: nil,
-            background: background,
-            goToStartOnCompletion: true
-        )
-    }
-
-    public static func background(
-        _ state: BackgroundStateType
-    ) -> Self {
-        .init(
-            start: nil,
-            final: nil,
-            background: state
-        )
-    }
-}
-
-protocol _ActionFunctionRegistry {
-    associatedtype Payload: Sendable
-    mutating func addFunction(_ handler: @escaping (Payload) async throws -> Void)
-}
-
-public struct ActionFunctionRegistry<Payload>: _ActionFunctionRegistry {
-    var functions: [(Payload) async throws -> Void] = []
-
-    mutating func addFunction(_ function: @escaping (Payload) async throws -> Void) {
-        functions.append(function)
-    }
-}
-
 @MainActor
 public class StateCore<
     StateType: CoreState,
@@ -181,7 +26,8 @@ public class StateCore<
     @Published
     public private(set) var state: StateType = .initial
 
-    public let eventSubject = EventPublisher<EventType>()
+    public let actionPublisher = EventPublisher<ActionType>()
+    public let eventPublisher = EventPublisher<EventType>()
 
     public init() {}
 
@@ -189,17 +35,48 @@ public class StateCore<
     private var functionRegistry: [CaseKey: any _ActionFunctionRegistry] = [:]
 
     private var currentTransitionAction: CaseKey?
+    private var stateBeforeCurrentTransitionAction: StateType?
 
     private func unpackErrorState<S: WithErrorState>(from _: S) -> S {
         .error
     }
 
-    private func isCancelAction<A: WithCancelAction>(from a: A) -> Bool {
-        a == A.cancel
+    private func hasErrorState() -> Bool {
+        StateType.self is any WithErrorState.Type
+    }
+
+    private func isCancelAction(
+        from a: ActionType
+    ) -> Bool {
+        if let a = a as? any WithCancelAction {
+            return a.isCancel
+        }
+        return false
+    }
+
+    private func isErrorAction(
+        from a: ActionType
+    ) -> Bool {
+        if let a = a as? any WithErrorAction {
+            return a.isError
+        }
+        return false
+    }
+
+    func withPossibleErrorAction<S: Sendable>(
+        from a: ActionType,
+        payload: S,
+        withError: (Error) async -> Void
+    ) async {
+        if let a = a as? any WithErrorAction, a.isError {
+            if let e = payload as? any Error {
+                await withError(e)
+            }
+        }
     }
 
     private var shouldRespondToError: Bool {
-        let hasErrorState = StateType.self is WithErrorState.Type
+        let hasErrorState = StateType.self is any WithErrorState.Type
         let hasErrorEvent = EventType.self is any WithErrorEvent.Type
 
         return hasErrorState || hasErrorEvent
@@ -214,11 +91,11 @@ public class StateCore<
         functionRegistry[action.hashValue] = registry
     }
 
-    public func error(_ error: Error, startState: StateType? = nil) {
+    private func set(error: Error) {
 
         self.error = error
 
-        if let i = StateType.initial as? WithErrorState {
+        if let i = StateType.initial as? any WithErrorState {
             let errorState = unpackErrorState(from: i)
 
             for action in actionTasks {
@@ -228,8 +105,9 @@ public class StateCore<
             backgroundStates.removeAll()
 
             state = errorState as! StateType
-        } else if let startState {
-            state = startState
+            stateBeforeCurrentTransitionAction = nil
+        } else if let stateBeforeCurrentTransitionAction {
+            state = stateBeforeCurrentTransitionAction
         }
     }
 
@@ -282,12 +160,18 @@ public class StateCore<
         background: Bool = false
     ) async {
         let extractedAction = action(payload)
+        
+        actionPublisher.send(extractedAction)
 
-        // MARK: - cancel
+        // MARK: - error
 
-        if let cancelActionType = extractedAction as? any WithCancelAction,
-           isCancelAction(from: cancelActionType)
-        {
+        await withPossibleErrorAction(
+            from: extractedAction,
+            payload: payload
+        ) { error in
+            // Note: if error is called from within an action Function,
+            // Task.isCancelled must be properly checked within the
+            // attached function
             for task in actionTasks.values {
                 task.cancel()
             }
@@ -296,7 +180,21 @@ public class StateCore<
                 backgroundStates.removeAll()
             }
 
-            if let newState = extractedAction.transition.start {
+            set(error: error)
+        }
+
+        // MARK: - cancel
+
+        if isCancelAction(from: extractedAction) {
+            for task in actionTasks.values {
+                task.cancel()
+            }
+
+            await MainActor.run {
+                backgroundStates.removeAll()
+            }
+
+            if let newState = extractedAction.transition.intermediate {
                 await MainActor.run {
                     self.state = newState
                 }
@@ -326,20 +224,48 @@ public class StateCore<
         background: Bool = false
     ) async {
         guard let register = functionRegistry[action.hashValue] as? ActionFunctionRegistry<S> else {
-            assertionFailure("No handlers registered for action: \(action)")
+            assertionFailure("No handlers registered for action: \(extractedAction)")
             return
         }
 
         let transition = extractedAction.transition
 
-        if !transition.isBackground, !background {
+        if !transition.isBackground, !background, !isErrorAction(from: extractedAction) {
             guard currentTransitionAction == nil else {
                 assertionFailure(
-                    "Cannot start a new transition action while another transition action is in progress",
+                    "State Violation: Cannot start a new transition action while another transition action is in progress!",
                 )
                 return
             }
             currentTransitionAction = action.hashValue
+        }
+
+        InvalidStatesCheck: if let invalidStates = transition.invalidStates {
+            guard !invalidStates.isEmpty else {
+                assertionFailure("Action Violation: An invalid sets array was set for action but was empty!")
+                break InvalidStatesCheck
+            }
+
+            guard !invalidStates.contains(state) else {
+                assertionFailure(
+                    "State Violation: Current state is in the set of invalid states for action!"
+                )
+                break InvalidStatesCheck
+            }
+        }
+
+        RequiredStatesCheck: if let requiredStates = transition.requiredStates {
+            guard !requiredStates.isEmpty else {
+                assertionFailure("Action Violation: A required sets array was set for action but was empty!")
+                break RequiredStatesCheck
+            }
+
+            guard requiredStates.contains(state) else {
+                assertionFailure(
+                    "State Violation: Current state is not in the set of required states for action!"
+                )
+                break RequiredStatesCheck
+            }
         }
 
         let finalState: StateType? = {
@@ -350,12 +276,12 @@ public class StateCore<
             if transition.goToStartOnCompletion {
                 return self.state
             } else {
-                return transition.final
+                return transition.destination
             }
         }()
 
-        let stateBeforeTransition = self.state
-        let startState: StateType? = transition.start
+        stateBeforeCurrentTransitionAction = self.state
+        let startState: StateType? = transition.intermediate
 
         if let startState, !background {
             await MainActor.run {
@@ -374,20 +300,16 @@ public class StateCore<
         var _error: Error? = nil
 
         do {
-            try await withThrowingTaskGroup { group in
-                for handler in register.functions {
-                    nonisolated(unsafe) let h = handler
-                    let op = { @Sendable in try await h(payload) }
-
-                    group.addTask {
-                        try await op()
-                    }
-                }
-
-                try await group.waitForAll()
-            }
+            try await runWithGroup(
+                functions: register.functions,
+                payload: payload
+            )
         } catch is CancellationError {
             // cancels are handled above
+            if !transition.isBackground {
+                currentTransitionAction = nil
+                stateBeforeCurrentTransitionAction = nil
+            }
             return
         } catch {
             _error = error
@@ -395,12 +317,12 @@ public class StateCore<
 
         if !transition.isBackground {
             self.currentTransitionAction = nil
+            self.stateBeforeCurrentTransitionAction = nil
         }
 
         if let _error {
-            self.error(
-                _error,
-                startState: stateBeforeTransition
+            self.set(
+                error: _error
             )
         } else if let finalState {
             await MainActor.run {
@@ -412,6 +334,24 @@ public class StateCore<
             await MainActor.run {
                 _ = self.backgroundStates.remove(backgroundState)
             }
+        }
+    }
+
+    private func runWithGroup<S: Sendable>(
+        functions: [(S) async throws -> Void],
+        payload: S
+    ) async throws {
+        try await withThrowingTaskGroup { group in
+            for handler in functions {
+                nonisolated(unsafe) let h = handler
+                let op = { @Sendable in try await h(payload) }
+
+                group.addTask {
+                    try await op()
+                }
+            }
+
+            try await group.waitForAll()
         }
     }
 }
