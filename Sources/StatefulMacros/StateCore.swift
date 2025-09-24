@@ -160,7 +160,7 @@ public class StateCore<
         background: Bool = false
     ) async {
         let extractedAction = action(payload)
-        
+
         actionPublisher.send(extractedAction)
 
         // MARK: - error
@@ -230,7 +230,7 @@ public class StateCore<
 
         let transition = extractedAction.transition
 
-        if !transition.isBackground, !background, !isErrorAction(from: extractedAction) {
+        if !transition.isBackground, !transition.isNone, !background, !isErrorAction(from: extractedAction) {
             guard currentTransitionAction == nil else {
                 assertionFailure(
                     "State Violation: Cannot start a new transition action while another transition action is in progress!",

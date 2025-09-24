@@ -59,7 +59,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
     enum BackgroundState {
         case loading
     }
-    
+
     enum Event {
         case foo
     }
@@ -112,11 +112,11 @@ asyncMain {
     let c = vm.$state.sink { state in
         print("State changed to \(state)")
     }
-    
+
     let b = vm.background.$states.sink { state in
         print("Background states changed to \(state)")
     }
-    
+
     let aa = vm.actions.sink { action in
         print("-- Action: \(action)")
     }

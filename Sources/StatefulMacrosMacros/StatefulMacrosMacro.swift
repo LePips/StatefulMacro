@@ -560,7 +560,7 @@ public struct StatefulMacro: MemberMacro {
             @Published public var state: \(raw: stateEnumName) = .initial
             """
         newDecls.append(stateVar)
-        
+
         let actionVar: DeclSyntax =
             """
             public var actions: EventPublisher<_Action> {
@@ -651,7 +651,7 @@ public struct StatefulMacro: MemberMacro {
 
             @Published
             public var states: Set<_BackgroundState> = []
-        
+
             public func `is`(_ backgroundState: _BackgroundState) -> Bool {
                 states.contains(backgroundState)
             }

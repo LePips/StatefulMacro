@@ -10,6 +10,10 @@ public struct StateTransition<
     var invalidStates: [StateType]?
     var goToStartOnCompletion: Bool
 
+    var isNone: Bool {
+        intermediate == nil && destination == nil && background == nil
+    }
+
     var isBackground: Bool {
         intermediate == nil && destination == nil && background != nil
     }
