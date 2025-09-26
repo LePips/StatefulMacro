@@ -583,7 +583,7 @@ public struct StatefulMacro: MemberMacro {
     ) -> [DeclSyntax] {
 
         var newDecls: [DeclSyntax] = []
-        
+
         if hasBackgroundStateType {
             let stateVar: DeclSyntax =
                 """
@@ -637,7 +637,7 @@ public struct StatefulMacro: MemberMacro {
             .receive(on: DispatchQueue.main)
             .assign(to: &self.$error)
         """ : ""
-        
+
         let backgroundAssignment = hasBackgroundState ? """
         core.$backgroundStates
             .receive(on: DispatchQueue.main)

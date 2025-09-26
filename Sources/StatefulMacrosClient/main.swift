@@ -52,7 +52,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
                     .required(.initial, .loading)
                     .onRepeat(.cancel)
             case .smile:
-                    .background(.loading)
+                .background(.loading)
             }
         }
     }
@@ -124,7 +124,7 @@ asyncMain {
 //    Task {
 //        try await Task.sleep(for: .seconds(1))
 //
-        await vm.smile()
+    await vm.smile()
 //    }
 
     await vm.load()
