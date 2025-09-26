@@ -52,10 +52,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
                     .required(.initial, .loading)
                     .onRepeat(.cancel)
             case .smile:
-                .none
-                    ._catch { _ in
-                        print("got error, throwing a different one")
-                    }
+                    .background(.loading)
             }
         }
     }
@@ -116,19 +113,19 @@ asyncMain {
         print("State changed to \(state)")
     }
 
-    let b = vm.background.$states.sink { _ in
-//        print("Background states changed to \(state)")
+    let b = vm.$background.sink { newValue in
+        print("Background states changed to \(newValue.states)")
     }
 
     let aa = vm.actions.sink { action in
         print("-- Action: \(action)")
     }
 
-    Task {
-        try await Task.sleep(for: .seconds(1))
-
+//    Task {
+//        try await Task.sleep(for: .seconds(1))
+//
         await vm.smile()
-    }
+//    }
 
     await vm.load()
 

@@ -84,8 +84,7 @@ public struct StatefulMacro: MemberMacro {
         ])
 
         if backgroundStateEnum != nil {
-            newDecls.append(createBackgroundClass(actionFunctions: generatedActionFunctions))
-            newDecls.append(createBackgroundProperty())
+            newDecls.append(createBackgroundStruct(actionFunctions: generatedActionFunctions))
         }
 
         try newDecls.append(contentsOf: generatedActionFunctions.map(buildFunction))
@@ -584,6 +583,15 @@ public struct StatefulMacro: MemberMacro {
     ) -> [DeclSyntax] {
 
         var newDecls: [DeclSyntax] = []
+        
+        if hasBackgroundStateType {
+            let stateVar: DeclSyntax =
+                """
+                @Published
+                private(set) public var background: _BackgroundActions = .init(core: nil, states: [])
+                """
+            newDecls.append(stateVar)
+        }
 
         if hasError {
             let stateVar: DeclSyntax =
@@ -629,6 +637,19 @@ public struct StatefulMacro: MemberMacro {
             .receive(on: DispatchQueue.main)
             .assign(to: &self.$error)
         """ : ""
+        
+        let backgroundAssignment = hasBackgroundState ? """
+        core.$backgroundStates
+            .receive(on: DispatchQueue.main)
+            .map { [weak self] newValue -> _BackgroundActions? in
+                return _BackgroundActions.init(
+                    core: core,
+                    states: newValue
+                )
+            }
+            .compactMap { $0 }
+            .assign(to: &self.$background)
+        """ : ""
 
         return """
         private func setupPublisherAssignments(core: _StateCore) {
@@ -636,6 +657,7 @@ public struct StatefulMacro: MemberMacro {
                 .receive(on: DispatchQueue.main)
                 .assign(to: &self.$state)
             \(raw: errorAssignment)
+            \(raw: backgroundAssignment)
         }
         """
     }
@@ -660,7 +682,7 @@ public struct StatefulMacro: MemberMacro {
         }
     }
 
-    private static func createBackgroundClass(
+    private static func createBackgroundStruct(
         actionFunctions: [FunctionSyntaxPair]
     ) -> DeclSyntax {
 
@@ -672,7 +694,12 @@ public struct StatefulMacro: MemberMacro {
                 !functionDecl.contains("func cancel(")
         }
 
-        let functionStrings = syncFunctions.map { functionDecl, stmt in
+        let optionalCoreStrings = syncFunctions.map { functionDecl, stmt in
+            let stmt = stmt.replacingOccurrences(of: "core.s", with: "core?.s")
+            return (functionDecl, stmt)
+        }
+
+        let functionStrings = optionalCoreStrings.map { functionDecl, stmt in
             var backgroundedStatement = stmt
             backgroundedStatement.removeLast()
             backgroundedStatement.append(", background: true)")
@@ -686,34 +713,26 @@ public struct StatefulMacro: MemberMacro {
 
         return """
         @MainActor
-        class _BackgroundActions: ObservableObject {
+        struct _BackgroundActions {
 
-            @Published
-            public var states: Set<_BackgroundState> = []
+            public let states: Set<_BackgroundState>
 
             public func `is`(_ backgroundState: _BackgroundState) -> Bool {
                 states.contains(backgroundState)
             }
 
-            private let core: _StateCore
+            private let core: _StateCore?
 
-            init(core: _StateCore) {
+            init(
+                core: _StateCore?,
+                states: Set<_BackgroundState> = []
+            ) {
                 self.core = core
-                core.$backgroundStates
-                    .receive(on: DispatchQueue.main)
-                    .assign(to: &self.$states)
+                self.states = states
             }
 
             \(raw: functionStrings)
         }
-        """
-    }
-
-    private static func createBackgroundProperty() -> DeclSyntax {
-        """
-        public lazy var background: _BackgroundActions = {
-            _BackgroundActions(core: core)
-        }()
         """
     }
 }
