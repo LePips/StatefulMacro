@@ -128,6 +128,8 @@ public struct StatefulMacro: MemberMacro {
             .first(where: { $0.name.text == "Event" })
     }
 
+    // MARK: - Background state
+
     private static func handleBackgroundState(in declaration: some DeclGroupSyntax) throws -> (String, EnumDeclSyntax?) {
         let userDefinedBackgroundStateEnum = declaration.memberBlock.members.first {
             $0.decl.as(EnumDeclSyntax.self)?.name.text == "BackgroundState"
@@ -146,6 +148,8 @@ public struct StatefulMacro: MemberMacro {
         }
         return (backgroundStateTypeName, backgroundStateEnum)
     }
+
+    // MARK: - Event enum
 
     private static func handleEventEnum(in declaration: some DeclGroupSyntax) throws -> (String, EnumDeclSyntax?, Bool) {
         let userDefinedEventEnum = findEventEnum(in: declaration)
@@ -190,6 +194,8 @@ public struct StatefulMacro: MemberMacro {
         }
         return (eventTypeName, eventEnum, hasErrorCase)
     }
+
+    // MARK: - State enum
 
     private static func handleStateEnum(
         in declaration: some DeclGroupSyntax,
@@ -248,6 +254,8 @@ public struct StatefulMacro: MemberMacro {
         }
         return (stateEnumName, stateEnum, hasErrorState)
     }
+
+    // MARK: - Action enum
 
     private static func createActionEnum(
         named actionEnumName: String,
@@ -325,6 +333,8 @@ public struct StatefulMacro: MemberMacro {
         }
     }
 
+    // MARK: - transition
+
     private static func modifyTransitionVariable(_ transitionVariable: VariableDeclSyntax) -> VariableDeclSyntax {
         var switchStmt: SwitchExprSyntax?
         if let accessorBlock = transitionVariable.bindings.first?.accessorBlock {
@@ -358,6 +368,8 @@ public struct StatefulMacro: MemberMacro {
         return transitionVariable
     }
 
+    // MARK: - Action functions
+
     private static func generateActionFunctions(
         from stateActionEnums: [EnumDeclSyntax],
         in declaration: some DeclGroupSyntax,
@@ -365,6 +377,10 @@ public struct StatefulMacro: MemberMacro {
     ) throws -> ([FunctionSyntaxPair], Bool) {
         var generatedActionFunctions: [FunctionSyntaxPair] = []
         let allCases = stateActionEnums.flatMap(\.memberBlock.members).compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }
+
+        let hasCancelAction = allCases.contains { caseDecl in
+            caseDecl.elements.contains { $0.name.text == "cancel" }
+        }
 
         let hasErrorAction = allCases.contains { caseDecl in
             caseDecl.elements.contains { $0.name.text == "error" }
@@ -383,8 +399,26 @@ public struct StatefulMacro: MemberMacro {
             generatedActionFunctions.append(asyncErrorFunc)
         }
 
+        let cancelActionAccess = hasCancelAction ? "public" : "private"
+        let syncCancelSend = hasCancelAction ? "core.send(\\.cancel)" : ""
+        let asyncCancelSend = hasCancelAction ? "await core.send(\\.cancel)" : ""
+        let coreCancel = "core.cancelAll()"
+
+        let syncCancelFunc = (
+            "\(cancelActionAccess) func cancel()",
+            "\n\t\(coreCancel)\n\t\(syncCancelSend)"
+        )
+        let asyncCancelFunc = (
+            "\(cancelActionAccess) func cancel() async",
+            "\n\t\(coreCancel)\n\t\(asyncCancelSend)"
+        )
+
+        generatedActionFunctions.append(syncCancelFunc)
+        generatedActionFunctions.append(asyncCancelFunc)
+
         let nonErrorCases = allCases.filter { caseDecl in
-            !caseDecl.elements.contains { $0.name.text == "error" }
+            !caseDecl.elements.contains { $0.name.text == "error" } &&
+                !caseDecl.elements.contains { $0.name.text == "cancel" }
         }
 
         let existingFunctionNames = declaration.memberBlock.members.compactMap { $0.decl.as(FunctionDeclSyntax.self)?.name.text }
@@ -467,6 +501,8 @@ public struct StatefulMacro: MemberMacro {
         return DeclSyntax(f)
     }
 
+    // MARK: - Function attributes
+
     private static func processFunctionAttributes(
         in declaration: some DeclGroupSyntax,
         context _: some MacroExpansionContext
@@ -517,6 +553,8 @@ public struct StatefulMacro: MemberMacro {
         }
         return addFunctionStmts
     }
+
+    // MARK: - Properties
 
     private static func createCoreProperty(
         stateEnumName: String,
@@ -630,7 +668,8 @@ public struct StatefulMacro: MemberMacro {
             !functionDecl.contains(" async")
         }
         .filter { functionDecl, _ in
-            !functionDecl.contains("func error(")
+            !functionDecl.contains("func error(") &&
+                !functionDecl.contains("func cancel(")
         }
 
         let functionStrings = syncFunctions.map { functionDecl, stmt in

@@ -34,6 +34,7 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
     enum ErrorType: Error {
         case generic
+        case fromSmile
     }
 
     @CasePathable
@@ -45,13 +46,16 @@ class MyViewModel<P: Equatable>: ObservableObject {
 
         var transition: Transition {
             switch self {
-            case .error, .cancel: .none
+            case .cancel, .error: .none
             case .load:
                 .to(.loading, then: .content)
-                    .whenBackground(.loading)
-                    .required(.initial)
-                    .invalid(.loading)
-            case .smile: .background(.loading)
+                    .required(.initial, .loading)
+                    .onRepeat(.cancel)
+            case .smile:
+                .none
+                    ._catch { _ in
+                        print("got error, throwing a different one")
+                    }
             }
         }
     }
@@ -92,17 +96,16 @@ class MyViewModel<P: Equatable>: ObservableObject {
     private func _load() async throws {
         print("Loading... \(Task.isCancelled)")
 
-        try await Task.sleep(for: .seconds(2))
+        try await Task.sleep(for: .seconds(3))
 
-//        await self.error(ErrorType.generic)
-
-        print("SHOULD NOT HAVE PRINTED, \(Task.isCancelled)")
+        print("+ Is task cancelled: \(Task.isCancelled)")
     }
 
     @Function(\Action.Cases.smile)
     private func _smile() async throws {
         try await Task.sleep(for: .seconds(0.5))
-        print("Smile! \(Task.isCancelled)")
+
+        throw ErrorType.generic
     }
 }
 
@@ -113,19 +116,23 @@ asyncMain {
         print("State changed to \(state)")
     }
 
-    let b = vm.background.$states.sink { state in
-        print("Background states changed to \(state)")
+    let b = vm.background.$states.sink { _ in
+//        print("Background states changed to \(state)")
     }
 
     let aa = vm.actions.sink { action in
         print("-- Action: \(action)")
     }
 
-    await vm.smile()
+    Task {
+        try await Task.sleep(for: .seconds(1))
+
+        await vm.smile()
+    }
+
     await vm.load()
 
     c.cancel()
     b.cancel()
     aa.cancel()
-//    d.cancel()
 }

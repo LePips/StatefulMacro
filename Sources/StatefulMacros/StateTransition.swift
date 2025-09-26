@@ -1,14 +1,26 @@
+// TODO: error catcher
+//       - catch errors, rethrow or ignore
+
 public struct StateTransition<
     StateType,
     BackgroundStateType: Hashable
 > {
+
+    public enum RepeatBehavior {
+        case cancel
+        case ignore
+    }
 
     var intermediate: StateType?
     var destination: StateType?
     var background: BackgroundStateType?
     var requiredStates: [StateType]?
     var invalidStates: [StateType]?
-    var goToStartOnCompletion: Bool
+    var repeatBehavior: RepeatBehavior = .ignore
+    var goToStartOnCompletion: Bool = false
+    var debounce: Double?
+
+    var `catch`: ((Error) async throws -> Void)?
 
     var isNone: Bool {
         intermediate == nil && destination == nil && background == nil
@@ -16,22 +28,6 @@ public struct StateTransition<
 
     var isBackground: Bool {
         intermediate == nil && destination == nil && background != nil
-    }
-
-    fileprivate init(
-        intermediate: StateType? = nil,
-        destination: StateType? = nil,
-        background: BackgroundStateType? = nil,
-        requiredStates: [StateType]? = nil,
-        invalidStates: [StateType]? = nil,
-        goToStartOnCompletion: Bool = false
-    ) {
-        self.intermediate = intermediate
-        self.destination = destination
-        self.background = background
-        self.requiredStates = requiredStates
-        self.invalidStates = invalidStates
-        self.goToStartOnCompletion = goToStartOnCompletion
     }
 }
 
@@ -72,10 +68,10 @@ public extension StateTransition {
 public extension StateTransition {
 
     static func loop(
-        _ destination: StateType
+        _ intermediate: StateType
     ) -> Self {
         .init(
-            destination: destination,
+            intermediate: intermediate,
             goToStartOnCompletion: true
         )
     }
@@ -142,5 +138,38 @@ public extension StateTransition {
         _ states: StateType...
     ) -> Self {
         invalid(states)
+    }
+}
+
+// MARK: - repeat
+
+public extension StateTransition {
+
+    func onRepeat(
+        _ behavior: RepeatBehavior
+    ) -> Self {
+        var copy = self
+        copy.repeatBehavior = behavior
+        return copy
+    }
+
+    /// - Important: Experimental
+    func _debounce(_ seconds: Double) -> Self {
+        var copy = self
+        copy.debounce = seconds
+        return copy
+    }
+}
+
+// MARK: - Error
+
+public extension StateTransition {
+
+    func `catch`(
+        _ catch: @escaping (Error) async throws -> Void
+    ) -> Self {
+        var copy = self
+        copy.catch = `catch`
+        return copy
     }
 }

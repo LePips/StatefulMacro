@@ -9,6 +9,7 @@ import Foundation
 //       - build graph on macro expansion and verify?
 // TODO: - when error occurs but there is no error state
 //       - go to starting state, final state
+// TODO: way to cancel other actions from within member but not with a cancel action
 
 @MainActor
 public class StateCore<
@@ -17,10 +18,12 @@ public class StateCore<
     EventType
 >: ObservableObject where ActionType.StateType == StateType {
     typealias CaseKey = Int
-    public typealias _StateTransition = StateTransition<StateType, ActionType.BackgroundStateType>
+
+    public typealias BackgroundStateType = ActionType.BackgroundStateType
+    public typealias Transition = StateTransition<StateType, BackgroundStateType>
 
     @Published
-    public private(set) var backgroundStates: Set<ActionType.BackgroundStateType> = []
+    public private(set) var backgroundStates: Set<BackgroundStateType> = []
     @Published
     public private(set) var error: Error? = nil
     @Published
@@ -35,6 +38,7 @@ public class StateCore<
     private var functionRegistry: [CaseKey: any _ActionFunctionRegistry] = [:]
 
     private var currentTransitionAction: CaseKey?
+    private var currentTransition: Transition?
     private var stateBeforeCurrentTransitionAction: StateType?
 
     private func unpackErrorState<S: WithErrorState>(from _: S) -> S {
@@ -43,6 +47,18 @@ public class StateCore<
 
     private func hasErrorState() -> Bool {
         StateType.self is any WithErrorState.Type
+    }
+
+    public func cancelAll() {
+        for task in actionTasks {
+            task.value.cancel()
+        }
+    }
+
+    public func cancel<S>(action: CaseKeyPath<ActionType, S>) {
+        if let task = actionTasks[action.hashValue] {
+            task.cancel()
+        }
     }
 
     private func isCancelAction(
@@ -129,15 +145,13 @@ public class StateCore<
         _ payload: S,
         background: Bool = false
     ) {
-        let newTask = Task {
+        Task {
             await send(
                 action,
                 payload,
                 background: background
             )
         }
-
-        actionTasks[action.hashValue] = newTask
     }
 
     // MARK: - async send
@@ -170,7 +184,7 @@ public class StateCore<
             payload: payload
         ) { error in
             // Note: if error is called from within an action Function,
-            // Task.isCancelled must be properly checked within the
+            // Task.isCancelled should be properly checked within the
             // attached function
             for task in actionTasks.values {
                 task.cancel()
@@ -194,21 +208,126 @@ public class StateCore<
                 backgroundStates.removeAll()
             }
 
-            if let newState = extractedAction.transition.intermediate {
+            if let newState = extractedAction.transition.destination {
                 await MainActor.run {
                     self.state = newState
                 }
             }
 
+            currentTransitionAction = nil
+            stateBeforeCurrentTransitionAction = nil
+
             return
         }
 
+        let transition: Transition = {
+            var _transition = extractedAction.transition
+
+            if _transition.isBackground {
+                _transition.intermediate = nil
+                _transition.destination = nil
+                return _transition
+            }
+
+            if _transition.goToStartOnCompletion {
+                _transition.destination = self.state
+                return _transition
+            }
+
+            return _transition
+        }()
+
+        if transition.debounce != nil, let cancellable = actionTasks[action.hashValue] {
+            cancellable.cancel()
+        }
+
+        if !transition.isBackground,
+           !transition.isNone,
+           !background,
+           !isErrorAction(from: extractedAction),
+           transition.debounce == nil
+        {
+            if currentTransitionAction == action.hashValue {
+                switch transition.repeatBehavior {
+                case .cancel:
+                    actionTasks[action.hashValue]?.cancel()
+                case .ignore:
+                    return
+                }
+            } else if let currentTransitionAction, currentTransitionAction != action.hashValue {
+                #if DEBUG
+                print("State warning: A new transition action started while another transition action is in progress!")
+                #endif
+            }
+
+            currentTransitionAction = action.hashValue
+        }
+
+        await _run(
+            extractedAction: extractedAction,
+            transition: transition,
+            action: action,
+            payload: payload
+        )
+    }
+
+    @MainActor
+    private func _run<S: Sendable>(
+        extractedAction: ActionType,
+        transition: Transition,
+        action: CaseKeyPath<ActionType, S>,
+        payload: S
+    ) async {
         let newTask = Task {
-            await _run(
+            guard let (
+                finalState,
+                backgroundState,
+                functions
+            ) = await preAction(
                 extractedAction: extractedAction,
-                action: action,
-                payload: payload,
-                background: background
+                transition: transition,
+                action: action
+            ) else {
+                return
+            }
+
+            if let debounce = transition.debounce {
+                do {
+                    try await Task.sleep(for: .seconds(debounce))
+                } catch {
+                    return
+                }
+            }
+
+            guard let error = await actuallyRun(
+                functions: functions,
+                payload: payload
+            ) else {
+                await postAction(
+                    error: nil,
+                    transition: transition,
+                    finalState: finalState,
+                    backgroundState: backgroundState
+                )
+                return
+            }
+
+            var finalError: Error? = error
+
+            if let handler = transition.catch {
+                do {
+                    try await handler(error)
+                    finalError = nil
+                } catch {
+                    finalError = error
+                }
+            }
+
+            await postAction(
+                error: finalError,
+                transition: transition,
+                finalState: finalState,
+                backgroundState: backgroundState
             )
         }
 
@@ -217,73 +336,86 @@ public class StateCore<
         await newTask.value
     }
 
-    private func _run<S: Sendable>(
-        extractedAction: ActionType,
-        action: CaseKeyPath<ActionType, S>,
-        payload: S,
-        background: Bool = false
-    ) async {
-        guard let register = functionRegistry[action.hashValue] as? ActionFunctionRegistry<S> else {
-            assertionFailure("No handlers registered for action: \(extractedAction)")
-            return
+    private func actuallyRun<S: Sendable>(
+        functions: [(S) async throws -> Void],
+        payload: S
+    ) async -> Error? {
+        do {
+            try await withThrowingTaskGroup { group in
+                for handler in functions {
+                    nonisolated(unsafe) let h = handler
+                    let op = { @Sendable in try await h(payload) }
+
+                    group.addTask {
+                        try await op()
+                    }
+                }
+
+                try await group.waitForAll()
+            }
+        } catch is CancellationError {
+            // Task was cancelled
+        } catch URLError.cancelled {
+            // URL request was cancelled
+        } catch {
+            return error
         }
 
-        let transition = extractedAction.transition
+        return nil
+    }
 
-        if !transition.isBackground, !transition.isNone, !background, !isErrorAction(from: extractedAction) {
-            guard currentTransitionAction == nil else {
-                assertionFailure(
-                    "State Violation: Cannot start a new transition action while another transition action is in progress!",
-                )
-                return
-            }
-            currentTransitionAction = action.hashValue
+    private func preAction<S>(
+        extractedAction: ActionType,
+        transition: Transition,
+        action: CaseKeyPath<ActionType, S>
+    ) async -> (
+        finalState: StateType?,
+        backgroundState: BackgroundStateType?,
+        functions: [(S) async throws -> Void]
+    )? {
+        guard let register = functionRegistry[action.hashValue] as? ActionFunctionRegistry<S> else {
+            assertionFailure("No handlers registered for action: \(extractedAction)")
+            return nil
         }
 
         InvalidStatesCheck: if let invalidStates = transition.invalidStates {
             guard !invalidStates.isEmpty else {
-                assertionFailure("Action Violation: An invalid sets array was set for action but was empty!")
+                #if DEBUG
+                print("Action Violation: An invalid states array was set for action but was empty!")
+                #endif
                 break InvalidStatesCheck
             }
 
             guard !invalidStates.contains(state) else {
-                assertionFailure(
-                    "State Violation: Current state is in the set of invalid states for action!"
-                )
+                #if DEBUG
+                print("Current state: \(state), invalid states: \(invalidStates) for action: \(extractedAction)")
+                #endif
                 break InvalidStatesCheck
             }
         }
 
         RequiredStatesCheck: if let requiredStates = transition.requiredStates {
             guard !requiredStates.isEmpty else {
-                assertionFailure("Action Violation: A required sets array was set for action but was empty!")
+                #if DEBUG
+                print("Action Violation: A required states array was set for action but was empty!")
+                #endif
                 break RequiredStatesCheck
             }
 
             guard requiredStates.contains(state) else {
-                assertionFailure(
-                    "State Violation: Current state is not in the set of required states for action!"
-                )
-                break RequiredStatesCheck
+                #if DEBUG
+                print("Current state: \(state), required states: \(requiredStates) for action: \(extractedAction)")
+                #endif
+                return nil
             }
         }
 
-        let finalState: StateType? = {
-            guard !background else {
-                return nil
-            }
-
-            if transition.goToStartOnCompletion {
-                return self.state
-            } else {
-                return transition.destination
-            }
-        }()
+        let finalState: StateType? = transition.destination
 
         stateBeforeCurrentTransitionAction = self.state
         let startState: StateType? = transition.intermediate
 
-        if let startState, !background {
+        if let startState, state != startState {
             await MainActor.run {
                 self.state = startState
             }
@@ -291,38 +423,33 @@ public class StateCore<
 
         let backgroundState = transition.background
 
-        if let backgroundState, transition.isBackground || background {
+        if let backgroundState {
             await MainActor.run {
                 _ = self.backgroundStates.insert(backgroundState)
             }
         }
 
-        var _error: Error? = nil
+        return (
+            finalState,
+            backgroundState,
+            register.functions
+        )
+    }
 
-        do {
-            try await runWithGroup(
-                functions: register.functions,
-                payload: payload
-            )
-        } catch is CancellationError {
-            // cancels are handled above
-            if !transition.isBackground {
-                currentTransitionAction = nil
-                stateBeforeCurrentTransitionAction = nil
-            }
-            return
-        } catch {
-            _error = error
-        }
-
+    private func postAction(
+        error: Error?,
+        transition: Transition,
+        finalState: StateType?,
+        backgroundState: BackgroundStateType?
+    ) async {
         if !transition.isBackground {
             self.currentTransitionAction = nil
             self.stateBeforeCurrentTransitionAction = nil
         }
 
-        if let _error {
+        if let error {
             self.set(
-                error: _error
+                error: error
             )
         } else if let finalState {
             await MainActor.run {
@@ -334,24 +461,6 @@ public class StateCore<
             await MainActor.run {
                 _ = self.backgroundStates.remove(backgroundState)
             }
-        }
-    }
-
-    private func runWithGroup<S: Sendable>(
-        functions: [(S) async throws -> Void],
-        payload: S
-    ) async throws {
-        try await withThrowingTaskGroup { group in
-            for handler in functions {
-                nonisolated(unsafe) let h = handler
-                let op = { @Sendable in try await h(payload) }
-
-                group.addTask {
-                    try await op()
-                }
-            }
-
-            try await group.waitForAll()
         }
     }
 }
