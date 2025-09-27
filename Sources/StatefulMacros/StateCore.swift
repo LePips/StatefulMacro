@@ -374,7 +374,9 @@ public class StateCore<
         functions: [(S) async throws -> Void]
     )? {
         guard let register = functionRegistry[action.hashValue] as? ActionFunctionRegistry<S> else {
-            assertionFailure("No handlers registered for action: \(extractedAction)")
+            #if DEBUG
+            print("No functions registered for action: \(extractedAction)")
+            #endif
             return nil
         }
 
