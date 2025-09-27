@@ -98,7 +98,7 @@ public struct StatefulMacro: MemberMacro {
 
         newDecls.append(
             createPublisherAssignments(
-                hasError: hasErrorState || hasErrorEvent,
+                hasError: hasErrorState || hasErrorEvent || hasErrorAction,
                 hasBackgroundState: backgroundStateEnum != nil
             )
         )
