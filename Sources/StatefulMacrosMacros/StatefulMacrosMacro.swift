@@ -43,13 +43,15 @@ public struct StatefulMacro: MemberMacro {
             context: context
         )
 
+        let (addFunctionStmts, throwingActions) = try processFunctionAttributes(in: declaration, context: context)
+
         let (generatedActionFunctions, hasErrorAction) = try generateActionFunctions(
             from: stateActionEnums,
             in: declaration,
+            throwingActions: throwingActions,
             context: context
         )
 
-        let addFunctionStmts = try processFunctionAttributes(in: declaration, context: context)
         let coreProperty = createCoreProperty(
             stateEnumName: stateEnumName,
             actionEnumName: actionEnumName,
@@ -372,6 +374,7 @@ public struct StatefulMacro: MemberMacro {
     private static func generateActionFunctions(
         from stateActionEnums: [EnumDeclSyntax],
         in declaration: some DeclGroupSyntax,
+        throwingActions: Set<String>,
         context: some MacroExpansionContext
     ) throws -> ([FunctionSyntaxPair], Bool) {
         var generatedActionFunctions: [FunctionSyntaxPair] = []
@@ -391,8 +394,8 @@ public struct StatefulMacro: MemberMacro {
                 "\n\tcore.send(\\.error, error)"
             )
             let asyncErrorFunc = (
-                "public func error(_ error: Error) async",
-                "\n\tawait core.send(\\.error, error)"
+                "public func error(_ error: Error) async throws",
+                "\n\ttry await core.send(\\.error, error)"
             )
             generatedActionFunctions.append(syncErrorFunc)
             generatedActionFunctions.append(asyncErrorFunc)
@@ -400,7 +403,7 @@ public struct StatefulMacro: MemberMacro {
 
         let cancelActionAccess = hasCancelAction ? "public" : "private"
         let syncCancelSend = hasCancelAction ? "core.send(\\.cancel)" : ""
-        let asyncCancelSend = hasCancelAction ? "await core.send(\\.cancel)" : ""
+        let asyncCancelSend = hasCancelAction ? "try? await core.send(\\.cancel)" : ""
         let coreCancel = "core.cancelAll()"
 
         let syncCancelFunc = (
@@ -479,11 +482,21 @@ public struct StatefulMacro: MemberMacro {
                 )
                 generatedActionFunctions.append(syncFuncDecl)
 
-                let asyncFuncDecl = (
-                    "public func \(funcName)(\(parameters.joined(separator: ", "))) async ",
-                    "\n\tawait core.\(sendCall)"
-                )
-                generatedActionFunctions.append(asyncFuncDecl)
+                let hasThrowingFunction = throwingActions.contains(funcName)
+
+                if hasThrowingFunction {
+                    let asyncThrowsFuncDecl = (
+                        "public func \(funcName)(\(parameters.joined(separator: ", "))) async throws",
+                        "\n\ttry await core.\(sendCall)"
+                    )
+                    generatedActionFunctions.append(asyncThrowsFuncDecl)
+                } else {
+                    let asyncFuncDecl = (
+                        "public func \(funcName)(\(parameters.joined(separator: ", "))) async",
+                        "\n\ttry? await core.\(sendCall)"
+                    )
+                    generatedActionFunctions.append(asyncFuncDecl)
+                }
             }
         }
 
@@ -505,7 +518,7 @@ public struct StatefulMacro: MemberMacro {
     private static func processFunctionAttributes(
         in declaration: some DeclGroupSyntax,
         context _: some MacroExpansionContext
-    ) throws -> [String] {
+    ) throws -> ([String], Set<String>) {
         let functionDecls = declaration.memberBlock.members.compactMap { member -> (FunctionDeclSyntax, LabeledExprListSyntax)? in
             guard let funcDecl = member.decl.as(FunctionDeclSyntax.self) else {
                 return nil
@@ -530,27 +543,51 @@ public struct StatefulMacro: MemberMacro {
         }
 
         var addFunctionStmts: [String] = []
+        var throwingActionCasePaths = Set<String>()
+
         for (funcDecl, arguments) in functionDecls {
             guard let actionCasePath = arguments.first?.expression.as(KeyPathExprSyntax.self)?.components.last else {
                 continue
             }
+
+            if let keypath = arguments.first?.expression.as(KeyPathExprSyntax.self),
+               let lastComponent = keypath.components.last,
+               case let .property(property) = lastComponent.component {
+                let caseName = property.declName.baseName.text
+                if funcDecl.signature.effectSpecifiers?.throwsSpecifier != nil {
+                    throwingActionCasePaths.insert(caseName)
+                }
+            }
+            
             let funcName = funcDecl.name.text
+
+            let isAsync = funcDecl.signature.effectSpecifiers?.asyncSpecifier != nil
+            let isThrowing = funcDecl.signature.effectSpecifiers?.throwsSpecifier != nil
+
+            var callPrefix = ""
+            if isThrowing {
+                callPrefix += "try "
+            }
+            if isAsync {
+                callPrefix += "await "
+            }
+
             let functionStmt: String
 
             if funcDecl.signature.parameterClause.parameters.isEmpty {
-                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] in\n\ttry await self?.\(funcName)()\n})"
+                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] in\n\t\(callPrefix)self?.\(funcName)()\n})"
             } else if funcDecl.signature.parameterClause.parameters.count == 1,
                       let firstParam = funcDecl.signature.parameterClause.parameters.first
             {
                 let paramName = firstParam.secondName?.text ?? firstParam.firstName.text
-                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramName) in\n\ttry await self?.\(funcName)(\(paramName))\n})"
+                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramName) in\n\t\(callPrefix)self?.\(funcName)(\(paramName))\n})"
             } else {
                 let paramNames = funcDecl.signature.parameterClause.parameters.compactMap { $0.secondName?.text ?? $0.firstName.text }
-                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramNames.joined(separator: ", ")) in\n\ttry await self?.\(funcName)(\(paramNames.joined(separator: ", ")))\n})"
+                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramNames.joined(separator: ", ")) in\n\t\(callPrefix)self?.\(funcName)(\(paramNames.joined(separator: ", ")))\n})"
             }
             addFunctionStmts.append(functionStmt)
         }
-        return addFunctionStmts
+        return (addFunctionStmts, throwingActionCasePaths)
     }
 
     // MARK: - Properties

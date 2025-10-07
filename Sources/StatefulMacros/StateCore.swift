@@ -34,7 +34,7 @@ public class StateCore<
 
     public init() {}
 
-    private var actionTasks: [CaseKey: Task<Void, Never>] = [:]
+    private var actionTasks: [CaseKey: Task<Void, Error>] = [:]
     private var functionRegistry: [CaseKey: any _ActionFunctionRegistry] = [:]
 
     private var currentTransitionAction: CaseKey?
@@ -146,7 +146,7 @@ public class StateCore<
         background: Bool = false
     ) {
         Task {
-            await send(
+            try? await send(
                 action,
                 payload,
                 background: background
@@ -159,8 +159,8 @@ public class StateCore<
     public func send(
         _ action: CaseKeyPath<ActionType, Void>,
         background: Bool = false
-    ) async {
-        await send(
+    ) async throws {
+        try await send(
             action,
             (),
             background: background
@@ -172,7 +172,7 @@ public class StateCore<
         _ action: CaseKeyPath<ActionType, S>,
         _ payload: S,
         background: Bool = false
-    ) async {
+    ) async throws {
         let extractedAction = action(payload)
 
         actionPublisher.send(extractedAction)
@@ -263,7 +263,7 @@ public class StateCore<
             currentTransitionAction = action.hashValue
         }
 
-        await _run(
+        try await _run(
             extractedAction: extractedAction,
             transition: transition,
             action: action,
@@ -277,8 +277,8 @@ public class StateCore<
         transition: Transition,
         action: CaseKeyPath<ActionType, S>,
         payload: S
-    ) async {
-        let newTask = Task {
+    ) async throws {
+        let newTask = Task<Void, Error> {
             guard let (
                 finalState,
                 backgroundState,
@@ -299,47 +299,50 @@ public class StateCore<
                 }
             }
 
-            guard let error = await actuallyRun(
-                functions: functions,
-                payload: payload
-            ) else {
+            do {
+                try await actuallyRun(
+                    functions: functions,
+                    payload: payload
+                )
+
                 await postAction(
                     error: nil,
                     transition: transition,
                     finalState: finalState,
                     backgroundState: backgroundState
                 )
-                return
-            }
+            } catch {
+                var finalError: Error? = error
 
-            var finalError: Error? = error
-
-            if let handler = transition.catch {
-                do {
-                    try await handler(error)
-                    finalError = nil
-                } catch {
-                    finalError = error
+                if let handler = transition.catch {
+                    do {
+                        try await handler(error)
+                        finalError = nil
+                    } catch {
+                        finalError = error
+                    }
                 }
-            }
 
-            await postAction(
-                error: finalError,
-                transition: transition,
-                finalState: finalState,
-                backgroundState: backgroundState
-            )
+                await postAction(
+                    error: finalError,
+                    transition: transition,
+                    finalState: finalState,
+                    backgroundState: backgroundState
+                )
+                
+                throw error
+            }
         }
 
         actionTasks[action.hashValue] = newTask
 
-        await newTask.value
+        try await newTask.value
     }
 
     private func actuallyRun<S: Sendable>(
         functions: [(S) async throws -> Void],
         payload: S
-    ) async -> Error? {
+    ) async throws {
         do {
             try await withThrowingTaskGroup { group in
                 for handler in functions {
@@ -358,10 +361,8 @@ public class StateCore<
         } catch URLError.cancelled {
             // URL request was cancelled
         } catch {
-            return error
+            throw error
         }
-
-        return nil
     }
 
     private func preAction<S>(
