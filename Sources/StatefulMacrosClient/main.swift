@@ -34,7 +34,7 @@ protocol WithRefresh {
     associatedtype Background: WithRefresh = VoidWithRefresh
 
     func refresh()
-    func refresh() async throws
+    func refresh() async
 
     var background: Background { get set }
 }
