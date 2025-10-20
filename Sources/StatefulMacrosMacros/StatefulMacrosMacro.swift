@@ -14,6 +14,8 @@ public struct StatefulMacro: MemberMacro {
         providingMembersOf declaration: some DeclGroupSyntax,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
+        let access = getAccessLevel(from: declaration)
+        let conformances = getConformances(from: node)
         let (actionEnumDecl, isCasePathable) = findActionEnum(in: declaration)
 
         guard let actionEnumDecl else {
@@ -29,9 +31,9 @@ public struct StatefulMacro: MemberMacro {
         }
 
         let stateActionEnums = [actionEnumDecl]
-        let (backgroundStateTypeName, backgroundStateEnum) = try handleBackgroundState(in: declaration)
-        let (stateEnumName, stateEnum, hasErrorState) = try handleStateEnum(in: declaration, context: context)
-        let (eventTypeName, eventEnum, hasErrorEvent) = try handleEventEnum(in: declaration)
+        let (backgroundStateTypeName, backgroundStateEnum) = try handleBackgroundState(in: declaration, access: access)
+        let (stateEnumName, stateEnum, hasErrorState) = try handleStateEnum(in: declaration, context: context, access: access)
+        let (eventTypeName, eventEnum, hasErrorEvent) = try handleEventEnum(in: declaration, access: access)
 
         let actionEnumName = "_Action"
 
@@ -40,7 +42,8 @@ public struct StatefulMacro: MemberMacro {
             from: stateActionEnums,
             stateEnumName: stateEnumName,
             backgroundStateTypeName: backgroundStateTypeName,
-            context: context
+            context: context,
+            access: access
         )
 
         let (addFunctionStmts, throwingActions) = try processFunctionAttributes(in: declaration, context: context)
@@ -49,7 +52,8 @@ public struct StatefulMacro: MemberMacro {
             from: stateActionEnums,
             in: declaration,
             throwingActions: throwingActions,
-            context: context
+            context: context,
+            access: access
         )
 
         let coreProperty = createCoreProperty(
@@ -60,11 +64,11 @@ public struct StatefulMacro: MemberMacro {
         )
 
         let transitionTypeAlias: DeclSyntax = """
-        public typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>
+        \(raw: access) typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>
         """
 
         let stateCoreTypeAlias: DeclSyntax = """
-        public typealias _StateCore = StateCore<\(raw: stateEnumName), \(raw: actionEnumName), \(raw: eventTypeName)>
+        \(raw: access) typealias _StateCore = StateCore<\(raw: stateEnumName), \(raw: actionEnumName), \(raw: eventTypeName)>
         """
 
         var newDecls: [DeclSyntax] = []
@@ -86,7 +90,7 @@ public struct StatefulMacro: MemberMacro {
         ])
 
         if backgroundStateEnum != nil {
-            newDecls.append(createBackgroundStruct(actionFunctions: generatedActionFunctions))
+            newDecls.append(createBackgroundStruct(actionFunctions: generatedActionFunctions, conformances: conformances, access: access))
         }
 
         try newDecls.append(contentsOf: generatedActionFunctions.map(buildFunction))
@@ -95,7 +99,8 @@ public struct StatefulMacro: MemberMacro {
             stateEnumName: stateEnumName,
             hasBackgroundStateType: backgroundStateEnum != nil,
             hasEventType: eventEnum != nil,
-            hasError: hasErrorAction || hasErrorEvent || hasErrorState
+            hasError: hasErrorAction || hasErrorEvent || hasErrorState,
+            access: access
         ))
 
         newDecls.append(
@@ -109,6 +114,35 @@ public struct StatefulMacro: MemberMacro {
     }
 
     // MARK: - Private Helper Functions
+
+    private static func getAccessLevel(from declaration: some DeclGroupSyntax) -> String {
+        let accessLevel = declaration.modifiers.first(where: {
+            $0.name.tokenKind == .keyword(.public) ||
+            $0.name.tokenKind == .keyword(.internal) ||
+            $0.name.tokenKind == .keyword(.fileprivate) ||
+            $0.name.tokenKind == .keyword(.private)
+        })?.name.text ?? "internal"
+
+        return (accessLevel == "private" || accessLevel == "fileprivate") ? "internal" : accessLevel
+    }
+
+    private static func getConformances(from node: AttributeSyntax) -> [String] {
+        guard let arguments = node.arguments?.as(LabeledExprListSyntax.self) else {
+            return []
+        }
+
+        let conformancesArgument = arguments.first { argument in
+            argument.label?.text == "conformances"
+        }
+
+        guard let arrayExpr = conformancesArgument?.expression.as(ArrayExprSyntax.self) else {
+            return []
+        }
+
+        return arrayExpr.elements.map { element in
+            element.expression.description.replacingOccurrences(of: ".self", with: "")
+        }
+    }
 
     private static func findActionEnum(in declaration: some DeclGroupSyntax) -> (actionEnum: EnumDeclSyntax?, isCasePathable: Bool) {
         guard let actionEnum = declaration.memberBlock.members.compactMap({ $0.decl.as(EnumDeclSyntax.self) })
@@ -131,7 +165,7 @@ public struct StatefulMacro: MemberMacro {
 
     // MARK: - Background state
 
-    private static func handleBackgroundState(in declaration: some DeclGroupSyntax) throws -> (String, EnumDeclSyntax?) {
+    private static func handleBackgroundState(in declaration: some DeclGroupSyntax, access: String) throws -> (String, EnumDeclSyntax?) {
         let userDefinedBackgroundStateEnum = declaration.memberBlock.members.first {
             $0.decl.as(EnumDeclSyntax.self)?.name.text == "BackgroundState"
         }?.decl.as(EnumDeclSyntax.self)
@@ -141,7 +175,7 @@ public struct StatefulMacro: MemberMacro {
         if let userDefinedBackgroundStateEnum {
             let newName = "_BackgroundState"
             backgroundStateTypeName = newName
-            backgroundStateEnum = try EnumDeclSyntax("public enum \(raw: newName): Hashable, Sendable") {
+            backgroundStateEnum = try EnumDeclSyntax("\(raw: access) enum \(raw: newName): Hashable, Sendable") {
                 for member in userDefinedBackgroundStateEnum.memberBlock.members {
                     member
                 }
@@ -152,7 +186,7 @@ public struct StatefulMacro: MemberMacro {
 
     // MARK: - Event enum
 
-    private static func handleEventEnum(in declaration: some DeclGroupSyntax) throws -> (String, EnumDeclSyntax?, Bool) {
+    private static func handleEventEnum(in declaration: some DeclGroupSyntax, access: String) throws -> (String, EnumDeclSyntax?, Bool) {
         let userDefinedEventEnum = findEventEnum(in: declaration)
 
         var eventTypeName = "Never"
@@ -187,7 +221,7 @@ public struct StatefulMacro: MemberMacro {
                 return !caseDecl.elements.contains { $0.name.text == "error" }
             }
 
-            eventEnum = try EnumDeclSyntax("public enum \(raw: newName)\(raw: conformancesString)") {
+            eventEnum = try EnumDeclSyntax("\(raw: access) enum \(raw: newName)\(raw: conformancesString)") {
                 for member in newCases {
                     member
                 }
@@ -200,7 +234,8 @@ public struct StatefulMacro: MemberMacro {
 
     private static func handleStateEnum(
         in declaration: some DeclGroupSyntax,
-        context: some MacroExpansionContext
+        context: some MacroExpansionContext,
+        access: String
     ) throws -> (String, EnumDeclSyntax, Bool) {
         let stateEnumName = "_State"
         let userDefinedStateEnum = declaration.memberBlock.members.compactMap { member -> EnumDeclSyntax? in
@@ -243,13 +278,13 @@ public struct StatefulMacro: MemberMacro {
                 conformances.append("WithErrorState")
             }
 
-            stateEnum = try EnumDeclSyntax("public enum \(raw: stateEnumName): \(raw: conformances.joined(separator: ", "))") {
+            stateEnum = try EnumDeclSyntax("\(raw: access) enum \(raw: stateEnumName): \(raw: conformances.joined(separator: ", "))") {
                 for member in userState.memberBlock.members {
                     member
                 }
             }
         } else {
-            stateEnum = try EnumDeclSyntax("public enum \(raw: stateEnumName): CoreState") {
+            stateEnum = try EnumDeclSyntax("\(raw: access) enum \(raw: stateEnumName): CoreState") {
                 try EnumCaseDeclSyntax("case initial")
             }
         }
@@ -263,7 +298,8 @@ public struct StatefulMacro: MemberMacro {
         from stateActionEnums: [EnumDeclSyntax],
         stateEnumName: String,
         backgroundStateTypeName: String,
-        context: some MacroExpansionContext
+        context: some MacroExpansionContext,
+        access: String
     ) throws -> EnumDeclSyntax {
         var actionCases = stateActionEnums.flatMap { $0.memberBlock.members.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) } }
         var actionConformances = ["StateAction"]
@@ -292,8 +328,8 @@ public struct StatefulMacro: MemberMacro {
             actionConformances.append("WithErrorAction")
         }
 
-        return try EnumDeclSyntax("@CasePathable public enum \(raw: actionEnumName): \(raw: actionConformances.joined(separator: ", "))") {
-            try TypeAliasDeclSyntax("public typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>")
+        return try EnumDeclSyntax("@CasePathable \(raw: access) enum \(raw: actionEnumName): \(raw: actionConformances.joined(separator: ", "))") {
+            try TypeAliasDeclSyntax("\(raw: access) typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>")
 
             for enumCase in actionCases {
                 enumCase
@@ -315,19 +351,19 @@ public struct StatefulMacro: MemberMacro {
             if let transitionVariable {
                 modifyTransitionVariable(transitionVariable)
             } else {
-                try VariableDeclSyntax("public var transition: Transition") {
+                try VariableDeclSyntax("\(raw: access) var transition: Transition") {
                     StmtSyntax("return .none")
                 }
             }
 
             if hasCancelCase {
-                try VariableDeclSyntax("public var isCancel: Bool") {
+                try VariableDeclSyntax("\(raw: access) var isCancel: Bool") {
                     StmtSyntax("if case .cancel = self { return true } else { return false }")
                 }
             }
 
             if hasErrorCase {
-                try VariableDeclSyntax("public var isError: Bool") {
+                try VariableDeclSyntax("\(raw: access) var isError: Bool") {
                     StmtSyntax("if case .error = self { return true } else { return false }")
                 }
             }
@@ -375,7 +411,8 @@ public struct StatefulMacro: MemberMacro {
         from stateActionEnums: [EnumDeclSyntax],
         in declaration: some DeclGroupSyntax,
         throwingActions: Set<String>,
-        context: some MacroExpansionContext
+        context: some MacroExpansionContext,
+        access: String
     ) throws -> ([FunctionSyntaxPair], Bool) {
         var generatedActionFunctions: [FunctionSyntaxPair] = []
         let allCases = stateActionEnums.flatMap(\.memberBlock.members).compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }
@@ -390,18 +427,18 @@ public struct StatefulMacro: MemberMacro {
 
         if hasErrorAction {
             let syncErrorFunc = (
-                "public func error(_ error: Error)",
+                "\(access) func error(_ error: Error)",
                 "\n\tcore.send(\\.error, error)"
             )
             let asyncErrorFunc = (
-                "public func error(_ error: Error) async throws",
+                "\(access) func error(_ error: Error) async throws",
                 "\n\ttry await core.send(\\.error, error)"
             )
             generatedActionFunctions.append(syncErrorFunc)
             generatedActionFunctions.append(asyncErrorFunc)
         }
 
-        let cancelActionAccess = hasCancelAction ? "public" : "private"
+        let cancelActionAccess = hasCancelAction ? access : "private"
         let syncCancelSend = hasCancelAction ? "core.send(\\.cancel)" : ""
         let asyncCancelSend = hasCancelAction ? "try? await core.send(\\.cancel)" : ""
         let coreCancel = "core.cancelAll()"
@@ -428,6 +465,7 @@ public struct StatefulMacro: MemberMacro {
         for caseDecl in nonErrorCases {
             for element in caseDecl.elements {
                 let funcName = element.name.text
+                let funcAccess = funcName.starts(with: "_") ? "private" : access
 
                 if existingFunctionNames.contains(funcName) {
                     let diagnostic = Diagnostic(node: Syntax(element.name), message: ActionFunctionConflictError(functionName: funcName))
@@ -477,7 +515,7 @@ public struct StatefulMacro: MemberMacro {
                 }
 
                 let syncFuncDecl = (
-                    "public func \(funcName)(\(parameters.joined(separator: ", ")))",
+                    "\(funcAccess) func \(funcName)(\(parameters.joined(separator: ", ")))",
                     "\n\tcore.\(sendCall)"
                 )
                 generatedActionFunctions.append(syncFuncDecl)
@@ -486,13 +524,13 @@ public struct StatefulMacro: MemberMacro {
 
                 if hasThrowingFunction {
                     let asyncThrowsFuncDecl = (
-                        "public func \(funcName)(\(parameters.joined(separator: ", "))) async throws",
+                        "\(funcAccess) func \(funcName)(\(parameters.joined(separator: ", "))) async throws",
                         "\n\ttry await core.\(sendCall)"
                     )
                     generatedActionFunctions.append(asyncThrowsFuncDecl)
                 } else {
                     let asyncFuncDecl = (
-                        "public func \(funcName)(\(parameters.joined(separator: ", "))) async",
+                        "\(funcAccess) func \(funcName)(\(parameters.joined(separator: ", "))) async",
                         "\n\ttry? await core.\(sendCall)"
                     )
                     generatedActionFunctions.append(asyncFuncDecl)
@@ -600,7 +638,7 @@ public struct StatefulMacro: MemberMacro {
     ) -> DeclSyntax {
         let coreProperty: DeclSyntax =
             """
-            private lazy var core: _StateCore = {
+            lazy var core: _StateCore = {
                 let core = _StateCore()
                 \(raw: addFunctionStmts.joined(separator: "\n\n"))
 
@@ -616,7 +654,8 @@ public struct StatefulMacro: MemberMacro {
         stateEnumName: String,
         hasBackgroundStateType: Bool,
         hasEventType: Bool,
-        hasError: Bool
+        hasError: Bool,
+        access: String
     ) -> [DeclSyntax] {
 
         var newDecls: [DeclSyntax] = []
@@ -625,7 +664,7 @@ public struct StatefulMacro: MemberMacro {
             let stateVar: DeclSyntax =
                 """
                 @Published
-                private(set) public var background: _BackgroundActions = .init(core: nil, states: [])
+                \(raw: access) var background: _BackgroundActions = .init(core: nil, states: [])
                 """
             newDecls.append(stateVar)
         }
@@ -633,20 +672,20 @@ public struct StatefulMacro: MemberMacro {
         if hasError {
             let stateVar: DeclSyntax =
                 """
-                @Published public var error: Error? = nil
+                @Published \(raw: access) var error: Error? = nil
                 """
             newDecls.append(stateVar)
         }
 
         let stateVar: DeclSyntax =
             """
-            @Published public var state: \(raw: stateEnumName) = .initial
+            @Published \(raw: access) var state: \(raw: stateEnumName) = .initial
             """
         newDecls.append(stateVar)
 
         let actionVar: DeclSyntax =
             """
-            public var actions: EventPublisher<_Action> {
+            \(raw: access) var actions: EventPublisher<_Action> {
                 core.actionPublisher
             }
             """
@@ -655,7 +694,7 @@ public struct StatefulMacro: MemberMacro {
         if hasEventType {
             let eventVar: DeclSyntax =
                 """
-                public var events: EventPublisher<_Event> {
+                \(raw: access) var events: EventPublisher<_Event> {
                     core.eventPublisher
                 }
                 """
@@ -680,7 +719,7 @@ public struct StatefulMacro: MemberMacro {
             .receive(on: DispatchQueue.main)
             .map { [weak self] newValue -> _BackgroundActions? in
                 return _BackgroundActions.init(
-                    core: core,
+                    core: self?.core,
                     states: newValue
                 )
             }
@@ -720,26 +759,24 @@ public struct StatefulMacro: MemberMacro {
     }
 
     private static func createBackgroundStruct(
-        actionFunctions: [FunctionSyntaxPair]
+        actionFunctions: [FunctionSyntaxPair],
+        conformances: [String],
+        access: String
     ) -> DeclSyntax {
-
-        let syncFunctions = actionFunctions.filter { functionDecl, _ in
-            !functionDecl.contains(" async")
-        }
-        .filter { functionDecl, _ in
+        let functionsToProcess = actionFunctions.filter { functionDecl, _ in
             !functionDecl.contains("func error(") &&
-                !functionDecl.contains("func cancel(")
+            !functionDecl.contains("func cancel(") &&
+            !functionDecl.starts(with: "private")
         }
 
-        let optionalCoreStrings = syncFunctions.map { functionDecl, stmt in
-            let stmt = stmt.replacingOccurrences(of: "core.s", with: "core?.s")
-            return (functionDecl, stmt)
-        }
+        let functionStrings = functionsToProcess.map { functionDecl, stmt in
+            var backgroundedStatement = stmt.trimmingCharacters(in: .whitespacesAndNewlines)
+            backgroundedStatement = backgroundedStatement.replacingOccurrences(of: "core.", with: "core?.")
 
-        let functionStrings = optionalCoreStrings.map { functionDecl, stmt in
-            var backgroundedStatement = stmt
-            backgroundedStatement.removeLast()
-            backgroundedStatement.append(", background: true)")
+            if backgroundedStatement.last == ")" {
+                backgroundedStatement.removeLast()
+                backgroundedStatement.append(", background: true)")
+            }
 
             return """
             \(functionDecl) {
@@ -748,13 +785,14 @@ public struct StatefulMacro: MemberMacro {
             """
         }.joined(separator: "\n\n")
 
+        let conformanceClause = conformances.isEmpty ? "" : ": " + conformances.joined(separator: ", ")
+
         return """
         @MainActor
-        struct _BackgroundActions {
+        \(raw: access) struct _BackgroundActions\(raw: conformanceClause) {
+            \(raw: access) let states: Set<_BackgroundState>
 
-            public let states: Set<_BackgroundState>
-
-            public func `is`(_ backgroundState: _BackgroundState) -> Bool {
+            \(raw: access) func `is`(_ backgroundState: _BackgroundState) -> Bool {
                 states.contains(backgroundState)
             }
 

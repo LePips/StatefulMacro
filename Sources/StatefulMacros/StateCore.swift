@@ -266,6 +266,7 @@ public class StateCore<
         try await _run(
             extractedAction: extractedAction,
             transition: transition,
+            background: background,
             action: action,
             payload: payload
         )
@@ -275,6 +276,7 @@ public class StateCore<
     private func _run<S: Sendable>(
         extractedAction: ActionType,
         transition: Transition,
+        background: Bool,
         action: CaseKeyPath<ActionType, S>,
         payload: S
     ) async throws {
@@ -286,6 +288,7 @@ public class StateCore<
             ) = await preAction(
                 extractedAction: extractedAction,
                 transition: transition,
+                background: background,
                 action: action
             ) else {
                 return
@@ -308,6 +311,7 @@ public class StateCore<
                 await postAction(
                     error: nil,
                     transition: transition,
+                    background: background,
                     finalState: finalState,
                     backgroundState: backgroundState
                 )
@@ -326,6 +330,7 @@ public class StateCore<
                 await postAction(
                     error: finalError,
                     transition: transition,
+                    background: background,
                     finalState: finalState,
                     backgroundState: backgroundState
                 )
@@ -368,6 +373,7 @@ public class StateCore<
     private func preAction<S>(
         extractedAction: ActionType,
         transition: Transition,
+        background: Bool,
         action: CaseKeyPath<ActionType, S>
     ) async -> (
         finalState: StateType?,
@@ -418,7 +424,7 @@ public class StateCore<
         stateBeforeCurrentTransitionAction = self.state
         let startState: StateType? = transition.intermediate
 
-        if let startState, state != startState {
+        if let startState, state != startState, !background {
             await MainActor.run {
                 self.state = startState
             }
@@ -442,6 +448,7 @@ public class StateCore<
     private func postAction(
         error: Error?,
         transition: Transition,
+        background: Bool,
         finalState: StateType?,
         backgroundState: BackgroundStateType?
     ) async {
@@ -450,11 +457,11 @@ public class StateCore<
             self.stateBeforeCurrentTransitionAction = nil
         }
 
-        if let error {
+        if let error, !background {
             self.set(
                 error: error
             )
-        } else if let finalState {
+        } else if let finalState, !background {
             await MainActor.run {
                 self.state = finalState
             }
