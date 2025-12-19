@@ -43,7 +43,7 @@ extension WithRefresh where Background == VoidWithRefresh {
 
     var background: VoidWithRefresh {
         get { .init() }
-        set { }
+        set {}
     }
 }
 
@@ -53,14 +53,14 @@ struct VoidWithRefresh: WithRefresh {
 
     var background: VoidWithRefresh {
         get { .init() }
-        set { }
+        set {}
     }
 }
 
 @MainActor
 @Stateful(conformances: [WithRefresh.self])
 class MyViewModel<P: Equatable>: ObservableObject, WithRefresh {
-    
+
     typealias Background = _BackgroundActions
 
     enum ErrorType: Error {
@@ -70,16 +70,17 @@ class MyViewModel<P: Equatable>: ObservableObject, WithRefresh {
 
     @CasePathable
     enum Action {
+        case cancel
         case refresh
         case _privateLoad(String)
 
         var transition: Transition {
             switch self {
             case .refresh:
-                    .to(.loading, then: .content)
+                .to(.loading, then: .content)
                     .whenBackground(.loading)
-            case ._privateLoad:
-                    .none
+            case ._privateLoad, .cancel:
+                .none
             }
         }
     }
@@ -106,44 +107,27 @@ class MyViewModel<P: Equatable>: ObservableObject, WithRefresh {
         self.value = value
     }
 
-//    @Function(\Action.Cases.error)
-//    private func onError(_ error: Error) {
-//        print("onError")
-//    }
-//
-//    @Function(\Action.Cases.error)
-//    private func onError2(_ error: Error) {
-//        print("onError2")
-//    }
-
     @Function(\Action.Cases.refresh)
     private func _load() async throws {
         print("Loading... \(Task.isCancelled)")
 
-        try await Task.sleep(for: .seconds(1))
-        
+        try await Task.sleep(for: .seconds(2))
+
         print("😊")
 
         print("+ Is task cancelled: \(Task.isCancelled)")
-        
-        try await _privateLoad("asdf")
+
+        await _privateLoad("asdf")
     }
-    
+
     @Function(\Action.Cases._privateLoad)
     private func onPrivateLoad(_ asdf: String) async throws {
         print("Private loading... \(asdf)")
 
         try await Task.sleep(for: .seconds(1))
-        
+
         print("🔒")
     }
-
-//    @Function(\Action.Cases.smile)
-//    private func _smile() async throws {
-//        try await Task.sleep(for: .seconds(0.5))
-//
-//        print("😊")
-//    }
 }
 
 asyncMain {
@@ -160,12 +144,19 @@ asyncMain {
     let aa = vm.actions.sink { action in
         print("-- Action: \(action)")
     }
-    
-    Task { try? await vm.background.refresh() }
-    
-    try await Task.sleep(for: .seconds(3))
+
+    let d = Task {
+        await vm.refresh()
+        print("Refreshed")
+    }
+
+    try await Task.sleep(for: .seconds(1))
+
+//    await vm.cancel()
 
     c.cancel()
     b.cancel()
     aa.cancel()
+
+    await d.value
 }

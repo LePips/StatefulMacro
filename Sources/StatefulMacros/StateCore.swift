@@ -334,7 +334,7 @@ public class StateCore<
                     finalState: finalState,
                     backgroundState: backgroundState
                 )
-                
+
                 throw error
             }
         }

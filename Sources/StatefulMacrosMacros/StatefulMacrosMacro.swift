@@ -50,7 +50,11 @@ public struct StatefulMacro: MemberMacro {
         ])
 
         if macroContext.backgroundStateEnum != nil {
-            newDecls.append(Self.createBackgroundStruct(actionFunctions: macroContext.generatedActionFunctions, conformances: macroContext.conformances, access: macroContext.access))
+            newDecls.append(Self.createBackgroundStruct(
+                actionFunctions: macroContext.generatedActionFunctions,
+                conformances: macroContext.conformances,
+                access: macroContext.access
+            ))
         }
 
         try newDecls.append(contentsOf: macroContext.generatedActionFunctions.map(Self.buildFunction))
@@ -73,7 +77,11 @@ public struct StatefulMacro: MemberMacro {
         return newDecls
     }
 
-    private static func createContext(of node: AttributeSyntax, in declaration: some DeclGroupSyntax, context: some MacroExpansionContext) throws -> StatefulMacroContext {
+    private static func createContext(
+        of node: AttributeSyntax,
+        in declaration: some DeclGroupSyntax,
+        context: some MacroExpansionContext
+    ) throws -> StatefulMacroContext {
         let access = Self.getAccessLevel(from: declaration)
         let conformances = Self.getConformances(from: node)
         let (actionEnumDecl, isCasePathable) = Self.findActionEnum(in: declaration)

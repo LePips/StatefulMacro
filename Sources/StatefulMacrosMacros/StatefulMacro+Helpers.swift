@@ -1,6 +1,6 @@
+import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
-import SwiftDiagnostics
 
 public typealias FunctionSyntaxPair = (String, String)
 
@@ -8,9 +8,9 @@ extension StatefulMacro {
     static func getAccessLevel(from declaration: some DeclGroupSyntax) -> String {
         let accessLevel = declaration.modifiers.first(where: {
             $0.name.tokenKind == .keyword(.public) ||
-            $0.name.tokenKind == .keyword(.internal) ||
-            $0.name.tokenKind == .keyword(.fileprivate) ||
-            $0.name.tokenKind == .keyword(.private)
+                $0.name.tokenKind == .keyword(.internal) ||
+                $0.name.tokenKind == .keyword(.fileprivate) ||
+                $0.name.tokenKind == .keyword(.private)
         })?.name.text ?? "internal"
 
         return (accessLevel == "private" || accessLevel == "fileprivate") ? "internal" : accessLevel
@@ -38,7 +38,8 @@ extension StatefulMacro {
 
     static func findActionEnum(in declaration: some DeclGroupSyntax) -> (actionEnum: EnumDeclSyntax?, isCasePathable: Bool) {
         guard let actionEnum = declaration.memberBlock.members.compactMap({ $0.decl.as(EnumDeclSyntax.self) })
-            .first(where: { $0.name.text == "Action" }) else {
+            .first(where: { $0.name.text == "Action" })
+        else {
             return (nil, false)
         }
 
@@ -88,7 +89,8 @@ extension StatefulMacro {
             hasErrorCase = userDefinedEventEnum.memberBlock.members.contains {
                 member in
                 guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self),
-                      let caseName = caseDecl.elements.first?.name.text else {
+                      let caseName = caseDecl.elements.first?.name.text
+                else {
                     return false
                 }
                 return caseName == "error"
@@ -139,7 +141,8 @@ extension StatefulMacro {
             let hasInitialCase = userState.memberBlock.members.contains {
                 member in
                 guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self),
-                      let caseName = caseDecl.elements.first?.name.text else {
+                      let caseName = caseDecl.elements.first?.name.text
+                else {
                     return false
                 }
                 return caseName == "initial"
@@ -154,7 +157,8 @@ extension StatefulMacro {
             hasErrorState = userState.memberBlock.members.contains {
                 member in
                 guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self),
-                      let caseName = caseDecl.elements.first?.name.text else {
+                      let caseName = caseDecl.elements.first?.name.text
+                else {
                     return false
                 }
                 return caseName == "error"
@@ -214,8 +218,12 @@ extension StatefulMacro {
             actionConformances.append("WithErrorAction")
         }
 
-        return try EnumDeclSyntax("@CasePathable \(raw: access) enum \(raw: actionEnumName): \(raw: actionConformances.joined(separator: ", "))") {
-            try TypeAliasDeclSyntax("\(raw: access) typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>")
+        return try EnumDeclSyntax(
+            "@CasePathable \(raw: access) enum \(raw: actionEnumName): \(raw: actionConformances.joined(separator: ", "))"
+        ) {
+            try TypeAliasDeclSyntax(
+                "\(raw: access) typealias Transition = StateTransition<\(raw: stateEnumName), \(raw: backgroundStateTypeName)>"
+            )
 
             for enumCase in actionCases {
                 enumCase
@@ -408,20 +416,12 @@ extension StatefulMacro {
                 generatedActionFunctions.append(syncFuncDecl)
 
                 let hasThrowingFunction = throwingActions.contains(funcName)
-
-                if hasThrowingFunction {
-                    let asyncThrowsFuncDecl = (
-                        "\(funcAccess) func \(funcName)(\(parameters.joined(separator: ", "))) async throws",
-                        "\n\ttry await core.\(sendCall)"
-                    )
-                    generatedActionFunctions.append(asyncThrowsFuncDecl)
-                } else {
-                    let asyncFuncDecl = (
-                        "\(funcAccess) func \(funcName)(\(parameters.joined(separator: ", "))) async",
-                        "\n\ttry? await core.\(sendCall)"
-                    )
-                    generatedActionFunctions.append(asyncFuncDecl)
-                }
+                let asyncCallPrefix = hasThrowingFunction ? "try? " : ""
+                let asyncFuncDecl = (
+                    "\(funcAccess) func \(funcName)(\(parameters.joined(separator: ", "))) async",
+                    "\n\t\(asyncCallPrefix)await core.\(sendCall)"
+                )
+                generatedActionFunctions.append(asyncFuncDecl)
             }
         }
 
@@ -444,10 +444,11 @@ extension StatefulMacro {
             guard let funcDecl = member.decl.as(FunctionDeclSyntax.self) else {
                 return nil
             }
-            
+
             let functionAttribute = funcDecl.attributes.first { attr in
                 guard let attrSyntax = attr.as(AttributeSyntax.self),
-                      let attrName = attrSyntax.attributeName.as(IdentifierTypeSyntax.self) else {
+                      let attrName = attrSyntax.attributeName.as(IdentifierTypeSyntax.self)
+                else {
                     return false
                 }
 
@@ -455,7 +456,8 @@ extension StatefulMacro {
             }
 
             guard let functionAttribute = functionAttribute?.as(AttributeSyntax.self),
-                  let arguments = functionAttribute.arguments?.as(LabeledExprListSyntax.self) else {
+                  let arguments = functionAttribute.arguments?.as(LabeledExprListSyntax.self)
+            else {
                 return nil
             }
 
@@ -472,13 +474,14 @@ extension StatefulMacro {
 
             if let keypath = arguments.first?.expression.as(KeyPathExprSyntax.self),
                let lastComponent = keypath.components.last,
-               case let .property(property) = lastComponent.component {
+               case let .property(property) = lastComponent.component
+            {
                 let caseName = property.declName.baseName.text
                 if funcDecl.signature.effectSpecifiers?.throwsClause?.throwsSpecifier != nil {
                     throwingActionCasePaths.insert(caseName)
                 }
             }
-            
+
             let funcName = funcDecl.name.text
 
             let isAsync = funcDecl.signature.effectSpecifiers?.asyncSpecifier != nil
@@ -503,7 +506,7 @@ extension StatefulMacro {
                 functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramName) in\n\t\t\(callPrefix)self?.\(funcName)(\(paramName))\n})"
             } else {
                 let paramNames = funcDecl.signature.parameterClause.parameters.compactMap { $0.secondName?.text ?? $0.firstName.text }
-                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramNames.joined(separator: ", ")) in\n\\tt\(callPrefix)self?.\(funcName)(\(paramNames.joined(separator: ", ")))\n})"
+                functionStmt = "core.addFunction(for: \\\(actionCasePath), function: { [weak self] \(paramNames.joined(separator: ", ")) in\n\t\t\(callPrefix)self?.\(funcName)(\(paramNames.joined(separator: ", ")))\n})"
             }
             addFunctionStmts.append(functionStmt)
         }
@@ -646,8 +649,8 @@ extension StatefulMacro {
         let functionsToProcess = actionFunctions.filter {
             functionDecl, _ in
             !functionDecl.contains("func error(") &&
-            !functionDecl.contains("func cancel(") &&
-            !functionDecl.starts(with: "private")
+                !functionDecl.contains("func cancel(") &&
+                !functionDecl.starts(with: "private")
         }
 
         let functionStrings = functionsToProcess.map {
