@@ -326,7 +326,7 @@ extension StatefulMacro {
             )
             let asyncErrorFunc = (
                 "\(access) func error(_ error: Error) async throws",
-                "\n\ttry await core.send(\\.error, error)"
+                "\n\ttry? await core.send(\\.error, error)"
             )
             generatedActionFunctions.append(syncErrorFunc)
             generatedActionFunctions.append(asyncErrorFunc)
@@ -416,10 +416,9 @@ extension StatefulMacro {
                 generatedActionFunctions.append(syncFuncDecl)
 
                 let hasThrowingFunction = throwingActions.contains(funcName)
-                let asyncCallPrefix = hasThrowingFunction ? "try? " : ""
                 let asyncFuncDecl = (
                     "\(funcAccess) func \(funcName)(\(parameters.joined(separator: ", "))) async",
-                    "\n\t\(asyncCallPrefix)await core.\(sendCall)"
+                    "\n\ttry? await core.\(sendCall)"
                 )
                 generatedActionFunctions.append(asyncFuncDecl)
             }
