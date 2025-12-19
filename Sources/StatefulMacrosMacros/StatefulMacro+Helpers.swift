@@ -325,7 +325,7 @@ extension StatefulMacro {
                 "\n\tcore.send(\\.error, error)"
             )
             let asyncErrorFunc = (
-                "\(access) func error(_ error: Error) async throws",
+                "\(access) func error(_ error: Error) async",
                 "\n\ttry? await core.send(\\.error, error)"
             )
             generatedActionFunctions.append(syncErrorFunc)
