@@ -4,7 +4,7 @@ import SwiftSyntax
 import SwiftSyntaxBuilder
 import SwiftSyntaxMacros
 
-/// The `@Function` macro is a marker used to register functions with the state core.
+/// `@Function` marker macro to register functions with the state core.
 public struct FunctionMacro: PeerMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -17,35 +17,13 @@ public struct FunctionMacro: PeerMacro {
             return []
         }
 
-        // Requirement 1: Must be private
-        let isPrivate = funcDecl.modifiers.contains { $0.name.text == "private" }
-
-        if !isPrivate {
-            let diagnostic = Diagnostic(node: Syntax(funcDecl.name), message: FunctionMacroError.mustBePrivate)
-            context.diagnose(diagnostic)
-        }
-
-        // Requirement 2: Function name must not be the same as the case name
-        guard let arguments = node.arguments?.as(LabeledExprListSyntax.self),
-              let firstArgument = arguments.first,
-              let keyPath = firstArgument.expression.as(KeyPathExprSyntax.self),
-              let lastComponent = keyPath.components.last,
-              let property = lastComponent.component.as(KeyPathPropertyComponentSyntax.self)
-        else {
-            let diagnostic = Diagnostic(node: Syntax(node), message: FunctionMacroError.missingArgument)
-            context.diagnose(diagnostic)
-            return []
-        }
-
-        let caseName = property.declName.baseName.text
-        let funcName = funcDecl.name.text
-
-        if caseName == funcName {
+        if let caseName = StatefulMacro.actionCaseProperty(in: node)?.declName.baseName.text,
+           caseName == funcDecl.name.text
+        {
             let diagnostic = Diagnostic(node: Syntax(funcDecl.name), message: FunctionMacroError.nameCollision)
             context.diagnose(diagnostic)
         }
 
-        // Requirement 3: All parameters must have underscored names
         for param in funcDecl.signature.parameterClause.parameters {
             let firstName = param.firstName
             if firstName.text != "_" && !firstName.text.starts(with: "_") {

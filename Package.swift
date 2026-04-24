@@ -20,10 +20,18 @@ let package = Package(
             name: "StatefulMacrosClient",
             targets: ["StatefulMacrosClient"]
         ),
+        .executable(
+            name: "StatefulGraph",
+            targets: ["StatefulGraph"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0-latest"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
         .package(url: "https://github.com/pointfreeco/swift-case-paths.git", from: "1.0.0"),
+        .package(url: "https://github.com/pointfreeco/xctest-dynamic-overlay", from: "1.9.0"),
+        .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.6.0"),
+        .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", exact: "1.18.9"),
     ],
     targets: [
         .macro(
@@ -39,6 +47,7 @@ let package = Package(
             dependencies: [
                 "StatefulMacrosMacros",
                 .product(name: "CasePaths", package: "swift-case-paths"),
+                .product(name: "IssueReporting", package: "xctest-dynamic-overlay"),
             ]
         ),
         .executableTarget(
@@ -46,6 +55,35 @@ let package = Package(
             dependencies: [
                 "StatefulMacros",
                 .product(name: "CasePaths", package: "swift-case-paths"),
+            ]
+        ),
+        .executableTarget(
+            name: "StatefulGraph",
+            dependencies: [
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+            ]
+        ),
+        .testTarget(
+            name: "StatefulMacrosMacrosTests",
+            dependencies: [
+                "StatefulMacrosMacros",
+                .product(name: "MacroTesting", package: "swift-macro-testing"),
+                .product(name: "InlineSnapshotTesting", package: "swift-snapshot-testing"),
+            ]
+        ),
+        .testTarget(
+            name: "StatefulMacrosTests",
+            dependencies: [
+                "StatefulMacros",
+                .product(name: "CasePaths", package: "swift-case-paths"),
+            ]
+        ),
+        .testTarget(
+            name: "StatefulGraphTests",
+            dependencies: [
+                "StatefulGraph",
             ]
         ),
     ]

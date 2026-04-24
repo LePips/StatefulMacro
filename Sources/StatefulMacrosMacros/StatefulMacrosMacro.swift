@@ -14,122 +14,54 @@ public struct StatefulMacro: MemberMacro {
         providingMembersOf declaration: some DeclGroupSyntax,
         in context: some MacroExpansionContext
     ) throws -> [DeclSyntax] {
-        let macroContext = try createContext(of: node, in: declaration, context: context)
-
-        let coreProperty = Self.createCoreProperty(
-            stateEnumName: macroContext.stateEnumName,
-            actionEnumName: macroContext.actionEnumName,
-            eventTypeName: macroContext.eventTypeName,
-            addFunctionStmts: macroContext.addFunctionStmts
-        )
-
-        let transitionTypeAlias: DeclSyntax = """
-        \(raw: macroContext.access) typealias Transition = StateTransition<\(raw: macroContext.stateEnumName), \(raw: macroContext.backgroundStateTypeName)>
-        """
-
-        let stateCoreTypeAlias: DeclSyntax = """
-        \(raw: macroContext.access) typealias _StateCore = StateCore<\(raw: macroContext.stateEnumName), \(raw: macroContext.actionEnumName), \(raw: macroContext.eventTypeName)>
-        """
-
-        var newDecls: [DeclSyntax] = []
-
-        if let eventEnum = macroContext.eventEnum {
-            newDecls.append(DeclSyntax(eventEnum))
-        }
-
-        if let backgroundStateEnum = macroContext.backgroundStateEnum {
-            newDecls.append(DeclSyntax(backgroundStateEnum))
-        }
-
-        newDecls.append(contentsOf: [
-            DeclSyntax(macroContext.stateEnum),
-            DeclSyntax(macroContext.actionEnum),
-            transitionTypeAlias,
-            stateCoreTypeAlias,
-            coreProperty,
-        ])
-
-        if macroContext.backgroundStateEnum != nil {
-            newDecls.append(Self.createBackgroundStruct(
-                actionFunctions: macroContext.generatedActionFunctions,
-                conformances: macroContext.conformances,
-                access: macroContext.access
-            ))
-        }
-
-        try newDecls.append(contentsOf: macroContext.generatedActionFunctions.map(Self.buildFunction))
-        newDecls.append(contentsOf: Self.createPublishedProperties(
-            in: declaration,
-            stateEnumName: macroContext.stateEnumName,
-            hasBackgroundStateType: macroContext.backgroundStateEnum != nil,
-            hasEventType: macroContext.eventEnum != nil,
-            hasError: macroContext.hasErrorAction || macroContext.hasErrorEvent || macroContext.hasErrorState,
-            access: macroContext.access
-        ))
-
-        newDecls.append(
-            Self.createPublisherAssignments(
-                hasError: macroContext.hasErrorState || macroContext.hasErrorEvent || macroContext.hasErrorAction,
-                hasBackgroundState: macroContext.backgroundStateEnum != nil
-            )
-        )
-
-        return newDecls
+        let input = try Self.makeInput(of: node, in: declaration, context: context)
+        try Self.validateAction(in: input, node: node, context: context)
+        return try Self.assembleMembers(from: buildPlan(from: input, context: context))
     }
 
-    private static func createContext(
-        of node: AttributeSyntax,
-        in declaration: some DeclGroupSyntax,
+    private static func validateAction(
+        in input: StatefulInput,
+        node: AttributeSyntax,
         context: some MacroExpansionContext
-    ) throws -> StatefulMacroContext {
-        let access = Self.getAccessLevel(from: declaration)
-        let conformances = Self.getConformances(from: node)
-        let (actionEnumDecl, isCasePathable) = Self.findActionEnum(in: declaration)
-
-        guard let actionEnumDecl else {
+    ) throws {
+        guard let actionEnum = input.actionEnum else {
             let diagnostic = Diagnostic(node: Syntax(node), message: StatefulMacroError.missingActionEnum)
             context.diagnose(diagnostic)
             throw StatefulMacroError.missingActionEnum
         }
 
-        guard isCasePathable else {
-            let diagnostic = Diagnostic(node: Syntax(actionEnumDecl.name), message: StatefulMacroError.actionEnumNotCasePathable)
+        guard input.actionEnumIsCasePathable else {
+            let diagnostic = Diagnostic(node: Syntax(actionEnum.name), message: StatefulMacroError.actionEnumNotCasePathable)
             context.diagnose(diagnostic)
             throw StatefulMacroError.actionEnumNotCasePathable
         }
+    }
 
-        let stateActionEnums = [actionEnumDecl]
-        let (backgroundStateTypeName, backgroundStateEnum) = try Self.handleBackgroundState(in: declaration, access: access)
-        let (stateEnumName, stateEnum, hasErrorState) = try Self.handleStateEnum(in: declaration, context: context, access: access)
-        let (eventTypeName, eventEnum, hasErrorEvent) = try Self.handleEventEnum(in: declaration, access: access)
-
+    private static func buildPlan(
+        from input: StatefulInput,
+        context: some MacroExpansionContext
+    ) throws -> StatefulPlan {
+        let (backgroundStateTypeName, backgroundStateEnum) = try Self.generatedBackgroundState(from: input)
+        let (stateEnumName, stateEnum, hasErrorState) = try Self.generatedState(from: input, context: context)
+        let (eventTypeName, eventEnum, hasErrorEvent) = try Self.generatedEvent(from: input)
         let actionEnumName = "_Action"
 
-        let actionEnum = try Self.createActionEnum(
+        let actionEnum = try Self.generatedActionEnum(
             named: actionEnumName,
-            from: stateActionEnums,
+            from: input,
             stateEnumName: stateEnumName,
             backgroundStateTypeName: backgroundStateTypeName,
+            access: input.access
+        )
+        let generatedActionFunctions = try Self.generatedActionFunctions(
+            from: input,
             context: context,
-            access: access
+            access: input.access
         )
 
-        let (addFunctionStmts, throwingActions) = try Self.processFunctionAttributes(in: declaration, context: context)
-
-        let (generatedActionFunctions, hasErrorAction) = try Self.generateActionFunctions(
-            from: stateActionEnums,
-            in: declaration,
-            throwingActions: throwingActions,
-            context: context,
-            access: access
-        )
-
-        return StatefulMacroContext(
-            access: access,
-            conformances: conformances,
-            actionEnumDecl: actionEnumDecl,
-            isCasePathable: isCasePathable,
-            stateActionEnums: stateActionEnums,
+        return StatefulPlan(
+            access: input.access,
+            conformances: input.conformances,
             backgroundStateTypeName: backgroundStateTypeName,
             backgroundStateEnum: backgroundStateEnum,
             stateEnumName: stateEnumName,
@@ -140,10 +72,9 @@ public struct StatefulMacro: MemberMacro {
             hasErrorEvent: hasErrorEvent,
             actionEnumName: actionEnumName,
             actionEnum: actionEnum,
-            addFunctionStmts: addFunctionStmts,
-            throwingActions: throwingActions,
+            addFunctionStmts: Self.functionRegistrations(from: input),
             generatedActionFunctions: generatedActionFunctions,
-            hasErrorAction: hasErrorAction
+            hasErrorAction: input.hasErrorAction
         )
     }
 }

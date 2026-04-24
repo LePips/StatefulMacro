@@ -11,5 +11,7 @@ struct ActionFunctionConflictError: DiagnosticMessage, Error {
         MessageID(domain: "com.statefulmacro", id: "actionFunctionConflict")
     }
 
-    var severity: DiagnosticSeverity { .error }
+    var severity: DiagnosticSeverity {
+        .error
+    }
 }

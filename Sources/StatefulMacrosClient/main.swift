@@ -1,162 +1,212 @@
 import CasePaths
+import Combine
 import Foundation
 import StatefulMacros
 
-// TODO: background struct holds background states
-// TODO: background state with ids
-// TODO: cancel with id
+struct Project: Identifiable, Equatable {
+    let id: UUID
+    var name: String
+    var unreadActivity: Int
+    var latestDraft: String?
+}
 
-@MainActor
-func asyncMain(execute work: @escaping () async throws -> Void) {
-    class State {
-        var done = false
-    }
+struct DashboardSnapshot {
+    var projects: [Project]
+    var selectedProjectID: Project.ID?
+}
 
-    let s = State()
+struct DraftNote {
+    let projectID: Project.ID
+    let body: String
+}
 
-    Task {
-        do {
-            try await work()
-        } catch {
-            print("Error: \(error)")
+struct DashboardService {
+    var fetchDashboard: @Sendable () async throws -> DashboardSnapshot
+    var fetchProject: @Sendable (Project.ID) async throws -> Project
+    var refreshActivity: @Sendable ([Project]) async throws -> [Project]
+    var saveDraft: @Sendable (DraftNote) async throws -> Void
+
+    static let preview = DashboardService(
+        fetchDashboard: {
+            try await Task.sleep(for: .milliseconds(150))
+            let design = Project(
+                id: UUID(uuidString: "9A835DBA-7260-472B-9F4B-F68C845AB2E0")!,
+                name: "Design System",
+                unreadActivity: 4
+            )
+            let billing = Project(
+                id: UUID(uuidString: "D7D9C0B3-E52E-4972-A7C1-A80A1F43B8C4")!,
+                name: "Billing Portal",
+                unreadActivity: 1
+            )
+            return DashboardSnapshot(
+                projects: [design, billing],
+                selectedProjectID: design.id
+            )
+        },
+        fetchProject: { id in
+            try await Task.sleep(for: .milliseconds(120))
+            return Project(
+                id: id,
+                name: "Billing Portal",
+                unreadActivity: 0
+            )
+        },
+        refreshActivity: { projects in
+            try await Task.sleep(for: .milliseconds(100))
+            return projects.map { project in
+                var updated = project
+                updated.unreadActivity += 1
+                return updated
+            }
+        },
+        saveDraft: { _ in
+            try await Task.sleep(for: .milliseconds(80))
         }
-        s.done = true
-    }
-
-    while s.done == false {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
-    }
+    )
 }
 
 @MainActor
-protocol WithRefresh {
+@Stateful
+final class ProjectDashboardViewModel: ObservableObject {
 
-    associatedtype Background: WithRefresh = VoidWithRefresh
-
-    func refresh()
-    func refresh() async
-
-    var background: Background { get set }
-}
-
-extension WithRefresh where Background == VoidWithRefresh {
-
-    var background: VoidWithRefresh {
-        get { .init() }
-        set {}
-    }
-}
-
-struct VoidWithRefresh: WithRefresh {
-    func refresh() {}
-    func refresh() async throws {}
-
-    var background: VoidWithRefresh {
-        get { .init() }
-        set {}
-    }
-}
-
-@MainActor
-@Stateful(conformances: [WithRefresh.self])
-class MyViewModel<P: Equatable>: ObservableObject, WithRefresh {
-
-    typealias Background = _BackgroundActions
-
-    enum ErrorType: Error {
-        case generic
-        case fromSmile
+    enum DashboardError: Error {
+        case projectNotFound(Project.ID)
     }
 
     @CasePathable
     enum Action {
+        case openDashboard
+        case selectProject(id: Project.ID)
+        case refreshActivity
+        case saveDraft(DraftNote)
         case cancel
-        case refresh
-        case _privateLoad(String)
 
         var transition: Transition {
             switch self {
-            case .refresh:
-                .to(.loading, then: .content)
-                    .whenBackground(.loading)
-            case ._privateLoad, .cancel:
-                .none
+            case .openDashboard:
+                .to(.loadingDashboard, then: .ready)
+                    .whenBackground(.syncingDashboard)
+                    .onRepeat(.cancel)
+            case .selectProject:
+                .to(.loadingProject, then: .ready)
+                    .whenBackground(.syncingDashboard)
+                    .required(.ready)
+            case .refreshActivity:
+                .loop(.refreshingActivity)
+                    .whenBackground(.syncingActivity)
+                    .required(.ready)
+                    .onRepeat(.cancel)
+            case .saveDraft:
+                .background(.savingDraft)
+                    .required(.ready)
+            case .cancel:
+                .to(.initial)
             }
         }
     }
 
     enum BackgroundState {
-        case loading
+        case syncingDashboard
+        case syncingActivity
+        case savingDraft
     }
 
     enum Event {
-        case foo
+        case dashboardLoaded(projectCount: Int)
+        case projectSelected(Project.ID)
+        case draftSaved(Project.ID)
     }
 
     enum State {
-        case error
         case initial
-        case loading
-        case content
+        case loadingDashboard
+        case loadingProject
+        case refreshingActivity
+        case ready
+        case error
     }
 
     @Published
-    var value: Int
+    private(set) var projects: [Project] = []
+    @Published
+    private(set) var selectedProjectID: Project.ID?
 
-    init(_ value: Int) {
-        self.value = value
+    private let service: DashboardService
+
+    init(service: DashboardService = .preview) {
+        self.service = service
     }
 
-    @Function(\Action.Cases.refresh)
-    private func _load() async throws {
-        print("Loading... \(Task.isCancelled)")
-
-        try await Task.sleep(for: .seconds(2))
-
-        print("😊")
-
-        print("+ Is task cancelled: \(Task.isCancelled)")
-
-        await _privateLoad("asdf")
+    @Function(\Action.Cases.openDashboard)
+    func loadDashboard() async throws {
+        let snapshot = try await service.fetchDashboard()
+        projects = snapshot.projects
+        selectedProjectID = snapshot.selectedProjectID
+        core.eventPublisher.send(.dashboardLoaded(projectCount: snapshot.projects.count))
     }
 
-    @Function(\Action.Cases._privateLoad)
-    private func onPrivateLoad(_ asdf: String) async throws {
-        print("Private loading... \(asdf)")
+    @Function(\Action.Cases.selectProject)
+    func loadProject(_ id: Project.ID) async throws {
+        let project = try await service.fetchProject(id)
 
-        try await Task.sleep(for: .seconds(1))
+        guard let index = projects.firstIndex(where: { $0.id == id }) else {
+            throw DashboardError.projectNotFound(id)
+        }
 
-        print("🔒")
+        projects[index] = project
+        selectedProjectID = id
+        core.eventPublisher.send(.projectSelected(id))
+    }
+
+    @Function(\Action.Cases.refreshActivity)
+    func refreshProjectActivity() async throws {
+        projects = try await service.refreshActivity(projects)
+    }
+
+    @Function(\Action.Cases.saveDraft)
+    func persistDraft(_ draft: DraftNote) async throws {
+        try await service.saveDraft(draft)
+
+        guard let index = projects.firstIndex(where: { $0.id == draft.projectID }) else {
+            throw DashboardError.projectNotFound(draft.projectID)
+        }
+
+        projects[index].latestDraft = draft.body
+        core.eventPublisher.send(.draftSaved(draft.projectID))
     }
 }
 
 asyncMain {
-    let vm = MyViewModel<Int>(1)
+    let dashboard = ProjectDashboardViewModel()
 
-    let c = vm.$state.sink { state in
-        print("++ State changed to \(state)")
+    let stateSubscription = dashboard.$state.sink { state in
+        print("state:", state)
+    }
+    let backgroundSubscription = dashboard.$background.sink { background in
+        print("background:", background.states)
+    }
+    let actionSubscription = dashboard.actions.sink { action in
+        print("action:", action)
+    }
+    let eventSubscription = dashboard.events.sink { event in
+        print("event:", event)
     }
 
-    let b = vm.$background.sink { newValue in
-        print(">> Background states changed to \(newValue.states)")
+    await dashboard.openDashboard()
+
+    if let selectedProjectID = dashboard.selectedProjectID {
+        await dashboard.background.refreshActivity()
+        await dashboard.background.saveDraft(DraftNote(
+            projectID: selectedProjectID,
+            body: "Follow up with design review notes."
+        ))
     }
 
-    let aa = vm.actions.sink { action in
-        print("-- Action: \(action)")
-    }
+    try await Task.sleep(for: .milliseconds(250))
 
-    let d = Task {
-        await vm.refresh()
-        print("Refreshed")
-    }
-
-    try await Task.sleep(for: .seconds(1))
-
-//    await vm.cancel()
-
-    c.cancel()
-    b.cancel()
-    aa.cancel()
-
-    await d.value
+    stateSubscription.cancel()
+    backgroundSubscription.cancel()
+    actionSubscription.cancel()
+    eventSubscription.cancel()
 }

@@ -1,6 +1,7 @@
 import CasePaths
 import Combine
 import Foundation
+import IssueReporting
 
 // TODO: need to protect against multiple actions that can change the state
 //       - only have one action that can change the state at a time
@@ -40,6 +41,22 @@ public class StateCore<
     private var currentTransitionAction: CaseKey?
     private var currentTransition: Transition?
     private var stateBeforeCurrentTransitionAction: StateType?
+
+    private func reportWarning(
+        _ message: @autoclosure () -> String,
+        fileID: StaticString = #fileID,
+        filePath: StaticString = #filePath,
+        line: UInt = #line,
+        column: UInt = #column
+    ) {
+        reportIssue(
+            "State warning: \(message())",
+            fileID: fileID,
+            filePath: filePath,
+            line: line,
+            column: column
+        )
+    }
 
     private func unpackErrorState<S: WithErrorState>(from _: S) -> S {
         .error
@@ -146,11 +163,13 @@ public class StateCore<
         background: Bool = false
     ) {
         Task {
-            try? await send(
-                action,
-                payload,
-                background: background
-            )
+            await StateTask.$isBackground.withValue(background) {
+                try? await send(
+                    action,
+                    payload,
+                    background: background
+                )
+            }
         }
     }
 
@@ -160,11 +179,13 @@ public class StateCore<
         _ action: CaseKeyPath<ActionType, Void>,
         background: Bool = false
     ) async throws {
-        try await send(
-            action,
-            (),
-            background: background
-        )
+        try await StateTask.$isBackground.withValue(background) {
+            try await send(
+                action,
+                (),
+                background: background
+            )
+        }
     }
 
     @MainActor
@@ -255,9 +276,7 @@ public class StateCore<
                     return
                 }
             } else if let currentTransitionAction, currentTransitionAction != action.hashValue {
-                #if DEBUG
-                print("State warning: A new transition action started while another transition action is in progress!")
-                #endif
+                reportWarning("A new transition action started while another transition action is in progress!")
             }
 
             currentTransitionAction = action.hashValue
@@ -381,40 +400,30 @@ public class StateCore<
         functions: [(S) async throws -> Void]
     )? {
         guard let register = functionRegistry[action.hashValue] as? ActionFunctionRegistry<S> else {
-            #if DEBUG
-            print("No functions registered for action: \(extractedAction)")
-            #endif
+            reportWarning("No functions registered for action: \(extractedAction)")
             return nil
         }
 
         InvalidStatesCheck: if let invalidStates = transition.invalidStates {
             guard !invalidStates.isEmpty else {
-                #if DEBUG
-                print("Action Violation: An invalid states array was set for action but was empty!")
-                #endif
+                reportWarning("Action violation: An invalid states array was set for action but was empty!")
                 break InvalidStatesCheck
             }
 
             guard !invalidStates.contains(state) else {
-                #if DEBUG
-                print("Current state: \(state), invalid states: \(invalidStates) for action: \(extractedAction)")
-                #endif
-                break InvalidStatesCheck
+                reportWarning("Current state: \(state), invalid states: \(invalidStates) for action: \(extractedAction)")
+                return nil
             }
         }
 
         RequiredStatesCheck: if let requiredStates = transition.requiredStates {
             guard !requiredStates.isEmpty else {
-                #if DEBUG
-                print("Action Violation: A required states array was set for action but was empty!")
-                #endif
+                reportWarning("Action violation: A required states array was set for action but was empty!")
                 break RequiredStatesCheck
             }
 
             guard requiredStates.contains(state) else {
-                #if DEBUG
-                print("Current state: \(state), required states: \(requiredStates) for action: \(extractedAction)")
-                #endif
+                reportWarning("Current state: \(state), required states: \(requiredStates) for action: \(extractedAction)")
                 return nil
             }
         }

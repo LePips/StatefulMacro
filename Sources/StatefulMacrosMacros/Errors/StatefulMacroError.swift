@@ -2,6 +2,7 @@ import SwiftDiagnostics
 
 enum StatefulMacroError: String, DiagnosticMessage, Error {
     case invalidStatefulTarget
+    case missingObservableObjectConformance
     case missingActionEnum
     case actionEnumNotCasePathable
     case missingInitialState
@@ -10,6 +11,8 @@ enum StatefulMacroError: String, DiagnosticMessage, Error {
         switch self {
         case .invalidStatefulTarget:
             return "`@Stateful` can only be applied to classes."
+        case .missingObservableObjectConformance:
+            return "`@Stateful` can only be applied to classes that conform to `ObservableObject`."
         case .missingActionEnum:
             return "`@Stateful` requires a nested enum named `Action`."
         case .actionEnumNotCasePathable:
@@ -23,5 +26,7 @@ enum StatefulMacroError: String, DiagnosticMessage, Error {
         MessageID(domain: "com.statefulmacro", id: rawValue)
     }
 
-    var severity: DiagnosticSeverity { .error }
+    var severity: DiagnosticSeverity {
+        .error
+    }
 }
