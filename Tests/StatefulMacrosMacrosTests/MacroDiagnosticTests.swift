@@ -139,35 +139,6 @@ struct MacroDiagnosticTests {
     }
 
     @Test
-    func missingObservableObjectDiagnostic() {
-        assertMacro {
-            """
-            @Stateful
-            final class MissingObservableObject {
-                @CasePathable
-                enum Action {
-                    case refresh
-                }
-            }
-            """
-        } diagnostics: {
-            """
-            @Stateful
-            ┬────────
-            ╰─ 🛑 `@Stateful` can only be applied to classes that conform to `ObservableObject`.
-            final class MissingObservableObject {
-                        ┬──────────────────────
-                        ╰─ 🛑 `@Stateful` can only be applied to classes that conform to `ObservableObject`.
-                @CasePathable
-                enum Action {
-                    case refresh
-                }
-            }
-            """
-        }
-    }
-
-    @Test
     func actionFunctionConflictDiagnostic() {
         assertMacro {
             """

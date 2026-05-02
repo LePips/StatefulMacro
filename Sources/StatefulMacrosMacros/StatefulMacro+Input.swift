@@ -13,12 +13,6 @@ extension StatefulMacro {
             throw StatefulMacroError.invalidStatefulTarget
         }
 
-        let inheritedTypes = classDecl.inheritanceClause.map { Array($0.inheritedTypes) } ?? []
-        guard inheritedTypes.contains(where: isObservableObjectConformance) else {
-            context.diagnose(Diagnostic(node: Syntax(classDecl.name), message: StatefulMacroError.missingObservableObjectConformance))
-            throw StatefulMacroError.missingObservableObjectConformance
-        }
-
         var actionEnum: EnumDeclSyntax?
         var stateEnum: EnumDeclSyntax?
         var eventEnum: EnumDeclSyntax?
@@ -126,19 +120,6 @@ extension StatefulMacro {
         }
 
         return expression.trimmedDescription.replacingOccurrences(of: ".self", with: "")
-    }
-
-    private static func isObservableObjectConformance(_ inheritedType: InheritedTypeSyntax) -> Bool {
-        if inheritedType.type.as(IdentifierTypeSyntax.self)?.name.text == "ObservableObject" {
-            return true
-        }
-
-        if inheritedType.type.as(MemberTypeSyntax.self)?.name.text == "ObservableObject" {
-            return true
-        }
-
-        let typeName = inheritedType.type.trimmedDescription
-        return typeName == "ObservableObject" || typeName.hasSuffix(".ObservableObject")
     }
 
     private static func isCasePathableAttribute(_ attr: AttributeListSyntax.Element) -> Bool {
