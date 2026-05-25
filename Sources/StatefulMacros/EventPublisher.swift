@@ -6,6 +6,8 @@ public struct EventPublisher<T>: Publisher {
 
     private let subject = PassthroughSubject<T, Never>()
 
+    public init() {}
+
     public func receive<S: Subscriber>(subscriber: S) where Never == S.Failure, T == S.Input {
         subject.receive(subscriber: subscriber)
     }
