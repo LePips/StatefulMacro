@@ -327,6 +327,14 @@ public class StateCore<
                     payload: payload
                 )
 
+                guard !Task.isCancelled else {
+                    await postCancellation(
+                        transition: transition,
+                        backgroundState: backgroundState
+                    )
+                    return
+                }
+
                 await postAction(
                     error: nil,
                     transition: transition,
@@ -361,6 +369,22 @@ public class StateCore<
         actionTasks[action.hashValue] = newTask
 
         try await newTask.value
+    }
+
+    private func postCancellation(
+        transition: Transition,
+        backgroundState: BackgroundStateType?
+    ) async {
+        if !transition.isBackground {
+            self.currentTransitionAction = nil
+            self.stateBeforeCurrentTransitionAction = nil
+        }
+
+        if let backgroundState {
+            await MainActor.run {
+                _ = self.backgroundStates.remove(backgroundState)
+            }
+        }
     }
 
     private func actuallyRun<S: Sendable>(

@@ -81,6 +81,7 @@ final class ProjectDashboardViewModel: ObservableObject {
         case refreshActivity
         case saveDraft(DraftNote)
         case cancel
+        case error
 
         var transition: Transition {
             switch self {
@@ -100,7 +101,7 @@ final class ProjectDashboardViewModel: ObservableObject {
             case .saveDraft:
                 .background(.savingDraft)
                     .required(.ready)
-            case .cancel:
+            case .cancel, .error:
                 .to(.initial)
             }
         }

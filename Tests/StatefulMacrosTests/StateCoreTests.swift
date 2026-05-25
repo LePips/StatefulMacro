@@ -96,6 +96,65 @@ struct StateCoreTests {
     }
 
     @Test
+    func errorActionCancelsRunningForegroundWorkAndClearsBackgroundStates() async throws {
+        let core = StateCore<TestState, TestAction, Never>()
+        let started = LockedRecorder<Bool>()
+        let completed = LockedRecorder<Bool>()
+        let cancelled = LockedRecorder<Bool>()
+
+        core.addFunction(for: \.foregroundWithBackground) {
+            started.append(true)
+            do {
+                try await Task.sleep(for: .seconds(1))
+                completed.append(true)
+            } catch {
+                cancelled.append(true)
+                throw error
+            }
+        }
+
+        let task = Task {
+            try? await core.send(\.foregroundWithBackground)
+        }
+
+        try await waitUntil {
+            started.snapshot == [true]
+        }
+
+        #expect(core.state == .loading)
+        #expect(core.backgroundStates.contains(.syncing))
+
+        await expectStateWarning(containing: "No functions registered") {
+            try await core.send(\.error, TestError.boom)
+        }
+        await task.value
+
+        #expect(cancelled.snapshot == [true])
+        #expect(completed.snapshot.isEmpty)
+        #expect(core.backgroundStates.isEmpty)
+        #expect(core.error as? TestError == .boom)
+        #expect(core.state == .error)
+    }
+
+    @Test
+    func cancelActionPublishesCancelWithoutRegisteredFunctionWarning() async throws {
+        let core = StateCore<TestState, TestAction, Never>()
+        let observedActions = LockedRecorder<TestAction>()
+        let cancellable = core.actionPublisher.sink { observedActions.append($0) }
+        defer { cancellable.cancel() }
+
+        try await core.send(\.cancel)
+
+        #expect(observedActions.snapshot.count == 1)
+        guard case .cancel = observedActions.snapshot.first else {
+            Issue.record("Expected the cancel action to be published")
+            return
+        }
+        #expect(core.backgroundStates.isEmpty)
+        #expect(core.state == .initial)
+    }
+
+    @Test
     func backgroundSendSetsTaskLocalAndDoesNotChangeForegroundState() async throws {
         let core = StateCore<TestState, TestAction, Never>()
         let sawBackgroundTask = LockedRecorder<Bool>()
@@ -138,6 +197,43 @@ struct StateCoreTests {
         await task.value
 
         #expect(core.backgroundStates.isEmpty)
+    }
+
+    @Test
+    func cancelActionCancelsRunningForegroundWorkAndUsesCancelTransitionDestination() async throws {
+        let core = StateCore<TestState, TestAction, Never>()
+        let started = LockedRecorder<Bool>()
+        let completed = LockedRecorder<Bool>()
+        let cancelled = LockedRecorder<Bool>()
+
+        core.addFunction(for: \.load) {
+            started.append(true)
+            do {
+                try await Task.sleep(for: .seconds(1))
+                completed.append(true)
+            } catch {
+                cancelled.append(true)
+                throw error
+            }
+        }
+
+        let task = Task {
+            try? await core.send(\.load)
+        }
+
+        try await waitUntil {
+            started.snapshot == [true]
+        }
+
+        #expect(core.state == .loading)
+
+        try await core.send(\.cancel)
+        await task.value
+
+        #expect(cancelled.snapshot == [true])
+        #expect(completed.snapshot.isEmpty)
+        #expect(core.backgroundStates.isEmpty)
+        #expect(core.state == .initial)
     }
 
     @Test
@@ -453,7 +549,7 @@ private enum TestAction: StateAction, WithCancelAction, WithErrorAction {
                     throw TestError.handler
                 }
         case .cancel:
-            .none
+            .to(.initial)
         case .error:
             .none
         }

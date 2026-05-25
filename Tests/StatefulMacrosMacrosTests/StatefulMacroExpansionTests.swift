@@ -219,6 +219,8 @@ struct StatefulMacroExpansionTests {
                         case .refresh:
                             .to(.loading, then: .content)
                                 .whenBackground(.loading)
+                        case .error:
+                            .none
                         case .cancel, .unnamed, .named, .pair, ._privateLoad:
                             .none
                         }
@@ -547,7 +549,7 @@ struct StatefulMacroExpansionTests {
     }
 
     @Test
-    func explicitTransitionGetterRemovesErrorCaseStructurally() {
+    func explicitTransitionGetterCopiesCombinedErrorCaseStructurally() {
         assertMacro {
             """
             @Stateful
@@ -560,9 +562,7 @@ struct StatefulMacroExpansionTests {
                     var transition: Transition {
                         get {
                             switch self {
-                            case .refresh:
-                                .none
-                            case .error:
+                            case .refresh, .error:
                                 .none
                             }
                         }
@@ -581,9 +581,7 @@ struct StatefulMacroExpansionTests {
                     var transition: Transition {
                         get {
                             switch self {
-                            case .refresh:
-                                .none
-                            case .error:
+                            case .refresh, .error:
                                 .none
                             }
                         }
@@ -600,7 +598,7 @@ struct StatefulMacroExpansionTests {
                     case error(Error)
                     var transition: Transition {
                         switch self {
-                        case .refresh:
+                        case .refresh, .error:
                             .none
                         }
                     }

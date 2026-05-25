@@ -125,7 +125,7 @@ extension StatefulMacro {
             }
 
             if let transitionVariable = input.transitionVariable {
-                try transitionVariableWithoutErrorCase(transitionVariable.trimmed)
+                try copiedTransitionVariable(transitionVariable.trimmed)
             } else {
                 try VariableDeclSyntax("\(raw: access) var transition: Transition") {
                     functionBodyStatement("return .none")
@@ -290,7 +290,7 @@ extension StatefulMacro {
         )
     }
 
-    private static func transitionVariableWithoutErrorCase(_ transitionVariable: VariableDeclSyntax) throws -> VariableDeclSyntax {
+    private static func copiedTransitionVariable(_ transitionVariable: VariableDeclSyntax) throws -> VariableDeclSyntax {
         let switchStmt: SwitchExprSyntax?
         if let accessorBlock = transitionVariable.bindings.first?.accessorBlock {
             switch accessorBlock.accessors {
@@ -319,17 +319,7 @@ extension StatefulMacro {
             return transitionVariable
         }
 
-        let cases = switchStmt.cases.filter { switchCase in
-            guard let label = switchCase.as(SwitchCaseSyntax.self)?.label.as(SwitchCaseLabelSyntax.self) else {
-                return true
-            }
-
-            return !label.caseItems.contains { item in
-                item.pattern.tokens(viewMode: .sourceAccurate).contains { $0.text == "error" }
-            }
-        }
-
-        let switchSource = normalizedMultilineSource(switchStmt.with(\.cases, cases).trimmedDescription)
+        let switchSource = normalizedMultilineSource(switchStmt.trimmedDescription)
         return try VariableDeclSyntax(
             """
             var transition: Transition {
@@ -374,23 +364,7 @@ extension StatefulMacro {
             }
         }
 
-        var filteredLines: [String] = []
-        var skippingErrorCase = false
-        for line in switchLines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("case .error") {
-                skippingErrorCase = true
-                continue
-            }
-            if skippingErrorCase, trimmed.hasPrefix("case ") || trimmed.hasPrefix("default:") || trimmed == "}" {
-                skippingErrorCase = false
-            }
-            if !skippingErrorCase {
-                filteredLines.append(line)
-            }
-        }
-
-        return normalizedMultilineSource(filteredLines.joined(separator: "\n"))
+        return normalizedMultilineSource(switchLines.joined(separator: "\n"))
     }
 
     private static func coreProperty(addFunctionStmts: [CodeBlockItemSyntax]) throws -> DeclSyntax {
