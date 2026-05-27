@@ -237,6 +237,50 @@ struct StateCoreTests {
     }
 
     @Test
+    func cancelActionSentFromRunningFunctionCancelsOtherWorkWithoutCancellingCurrentAction() async throws {
+        let core = StateCore<TestState, TestAction, Never>()
+        let backgroundStarted = LockedRecorder<Bool>()
+        let backgroundCancelled = LockedRecorder<Bool>()
+        let loadProgress = LockedRecorder<String>()
+        let loadStatesAfterCancel = LockedRecorder<TestState>()
+
+        core.addFunction(for: \.backgroundLoad) {
+            backgroundStarted.append(true)
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                backgroundCancelled.append(true)
+                throw error
+            }
+        }
+
+        let backgroundTask = Task {
+            try? await core.send(\.backgroundLoad)
+        }
+
+        try await waitUntil {
+            backgroundStarted.snapshot == [true]
+        }
+
+        core.addFunction(for: \.load) { @MainActor in
+            loadProgress.append("beforeCancel")
+            core.cancelAll()
+            try? await core.send(\.cancel)
+            loadStatesAfterCancel.append(core.state)
+            loadProgress.append("afterCancel")
+        }
+
+        try await core.send(\.load)
+        await backgroundTask.value
+
+        #expect(backgroundCancelled.snapshot == [true])
+        #expect(loadStatesAfterCancel.snapshot == [.loading])
+        #expect(loadProgress.snapshot == ["beforeCancel", "afterCancel"])
+        #expect(core.backgroundStates.isEmpty)
+        #expect(core.state == .loaded)
+    }
+
+    @Test
     func loopTransitionReturnsToStartingStateAfterWorkCompletes() async throws {
         let core = StateCore<TestState, TestAction, Never>()
         let statesDuringWork = LockedRecorder<TestState>()

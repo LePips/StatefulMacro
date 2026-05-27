@@ -67,8 +67,12 @@ public class StateCore<
     }
 
     public func cancelAll() {
-        for task in actionTasks {
-            task.value.cancel()
+        cancelAll(except: StateTask.currentActionKey)
+    }
+
+    private func cancelAll(except actionKey: CaseKey?) {
+        for (key, task) in actionTasks where key != actionKey {
+            task.cancel()
         }
     }
 
@@ -221,22 +225,23 @@ public class StateCore<
         // MARK: - cancel
 
         if isCancelAction(from: extractedAction) {
-            for task in actionTasks.values {
-                task.cancel()
-            }
+            let currentActionKey = StateTask.currentActionKey
+            cancelAll(except: currentActionKey)
 
             await MainActor.run {
                 backgroundStates.removeAll()
             }
 
-            if let newState = extractedAction.transition.destination {
+            if currentActionKey == nil, let newState = extractedAction.transition.destination {
                 await MainActor.run {
                     self.state = newState
                 }
             }
 
-            currentTransitionAction = nil
-            stateBeforeCurrentTransitionAction = nil
+            if currentActionKey == nil {
+                currentTransitionAction = nil
+                stateBeforeCurrentTransitionAction = nil
+            }
 
             return
         }
@@ -299,74 +304,78 @@ public class StateCore<
         action: CaseKeyPath<ActionType, S>,
         payload: S
     ) async throws {
+        let actionKey = action.hashValue
+
         let newTask = Task<Void, Error> {
-            guard let (
-                finalState,
-                backgroundState,
-                functions
-            ) = await preAction(
-                extractedAction: extractedAction,
-                transition: transition,
-                background: background,
-                action: action
-            ) else {
-                return
-            }
-
-            if let debounce = transition.debounce {
-                do {
-                    try await Task.sleep(for: .seconds(debounce))
-                } catch {
-                    return
-                }
-            }
-
-            do {
-                try await actuallyRun(
-                    functions: functions,
-                    payload: payload
-                )
-
-                guard !Task.isCancelled else {
-                    await postCancellation(
-                        transition: transition,
-                        backgroundState: backgroundState
-                    )
-                    return
-                }
-
-                await postAction(
-                    error: nil,
+            try await StateTask.$currentActionKey.withValue(actionKey) {
+                guard let (
+                    finalState,
+                    backgroundState,
+                    functions
+                ) = await preAction(
+                    extractedAction: extractedAction,
                     transition: transition,
                     background: background,
-                    finalState: finalState,
-                    backgroundState: backgroundState
-                )
-            } catch {
-                var finalError: Error? = error
+                    action: action
+                ) else {
+                    return
+                }
 
-                if let handler = transition.catch {
+                if let debounce = transition.debounce {
                     do {
-                        try await handler(error)
-                        finalError = nil
+                        try await Task.sleep(for: .seconds(debounce))
                     } catch {
-                        finalError = error
+                        return
                     }
                 }
 
-                await postAction(
-                    error: finalError,
-                    transition: transition,
-                    background: background,
-                    finalState: finalState,
-                    backgroundState: backgroundState
-                )
+                do {
+                    try await actuallyRun(
+                        functions: functions,
+                        payload: payload
+                    )
 
-                throw error
+                    guard !Task.isCancelled else {
+                        await postCancellation(
+                            transition: transition,
+                            backgroundState: backgroundState
+                        )
+                        return
+                    }
+
+                    await postAction(
+                        error: nil,
+                        transition: transition,
+                        background: background,
+                        finalState: finalState,
+                        backgroundState: backgroundState
+                    )
+                } catch {
+                    var finalError: Error? = error
+
+                    if let handler = transition.catch {
+                        do {
+                            try await handler(error)
+                            finalError = nil
+                        } catch {
+                            finalError = error
+                        }
+                    }
+
+                    await postAction(
+                        error: finalError,
+                        transition: transition,
+                        background: background,
+                        finalState: finalState,
+                        backgroundState: backgroundState
+                    )
+
+                    throw error
+                }
             }
         }
 
-        actionTasks[action.hashValue] = newTask
+        actionTasks[actionKey] = newTask
 
         try await newTask.value
     }
