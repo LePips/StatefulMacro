@@ -514,6 +514,25 @@ struct StateCoreTests {
             Issue.record("Expected TestError.boom, got \(error)")
         }
     }
+
+    @Test
+    func throwingLoopTransitionWithoutErrorStateReturnsToStartingState() async throws {
+        let core = StateCore<TestStateWithoutError, TestActionWithoutError, Never>()
+
+        core.addFunction(for: \.throwingLoop) {
+            throw TestError.boom
+        }
+
+        do {
+            try await core.send(\.throwingLoop)
+            Issue.record("Expected send to throw")
+        } catch TestError.boom {
+            #expect(core.error as? TestError == .boom)
+            #expect(core.state == .initial)
+        } catch {
+            Issue.record("Expected TestError.boom, got \(error)")
+        }
+    }
 }
 
 private enum TestState: CoreState, WithErrorState {
@@ -617,6 +636,26 @@ private enum TestAction: StateAction, WithCancelAction, WithErrorAction {
 private enum TestError: Error, Equatable {
     case boom
     case handler
+}
+
+private enum TestStateWithoutError: CoreState {
+    case initial
+    case loading
+}
+
+@CasePathable
+private enum TestActionWithoutError: StateAction {
+    typealias StateType = TestStateWithoutError
+    typealias BackgroundStateType = BackgroundState
+
+    case throwingLoop
+
+    var transition: Transition {
+        switch self {
+        case .throwingLoop:
+            .loop(.loading)
+        }
+    }
 }
 
 private func waitUntil(

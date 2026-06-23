@@ -494,11 +494,6 @@ public class StateCore<
         finalState: StateType?,
         backgroundState: BackgroundStateType?
     ) async {
-        if !transition.isBackground {
-            self.currentTransitionAction = nil
-            self.stateBeforeCurrentTransitionAction = nil
-        }
-
         if let error, !background {
             self.set(
                 error: error
@@ -507,6 +502,11 @@ public class StateCore<
             await MainActor.run {
                 self.state = finalState
             }
+        }
+
+        if !transition.isBackground {
+            self.currentTransitionAction = nil
+            self.stateBeforeCurrentTransitionAction = nil
         }
 
         if let backgroundState {
