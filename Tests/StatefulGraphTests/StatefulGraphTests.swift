@@ -105,15 +105,13 @@ struct StatefulGraphTests {
 
     private func renderGraph(
         source: String,
-        typeName: String,
-        format: String = "mermaid"
+        typeName: String
     ) throws -> String {
         let sourceURL = temporaryDirectory.appending(path: "\(typeName).swift")
         try source.write(to: sourceURL, atomically: true, encoding: .utf8)
         return try runGraph(arguments: [
             "--input", sourceURL.path,
             "--type", typeName,
-            "--format", format,
         ]).standardOutput
     }
 
