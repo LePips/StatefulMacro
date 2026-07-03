@@ -14,7 +14,10 @@ let package = Package(
     products: [
         .library(
             name: "StatefulMacros",
-            targets: ["StatefulMacros"]
+            targets: [
+                "StatefulMacros",
+                "StatefulMacrosCore",
+            ]
         ),
         .executable(
             name: "StatefulMacrosClient",
@@ -45,7 +48,13 @@ let package = Package(
         .target(
             name: "StatefulMacros",
             dependencies: [
+                "StatefulMacrosCore",
                 "StatefulMacrosMacros",
+            ]
+        ),
+        .target(
+            name: "StatefulMacrosCore",
+            dependencies: [
                 .product(name: "CasePaths", package: "swift-case-paths"),
                 .product(name: "IssueReporting", package: "xctest-dynamic-overlay"),
             ]
